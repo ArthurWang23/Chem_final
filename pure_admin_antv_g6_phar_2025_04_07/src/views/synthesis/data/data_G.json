@@ -1,0 +1,141 @@
+{
+  "nodes": {
+    "id": "Tree1y6cg47",
+    "icon": "blob:http://localhost:8848/2338d0d4-f9ff-4dfc-9df6-42f4b142ffdc",
+    "smiles": "CC1=CC=CC(C)=C1NC(CN(CC)CC)=O",
+    "children": [
+      {
+        "id": "#1",
+        "icon": "icon2.png",
+        "collapsed": false,
+        "condition": {
+          "0": [
+            "20",
+            "Cc1ccccc1",
+            "",
+            "",
+            "",
+            "",
+            "0.000"
+          ],
+          "1": [
+            "116.53864",
+            "",
+            "",
+            "[Cu]",
+            "",
+            "",
+            "0.008"
+          ],
+          "2": [
+            "77.07335",
+            "Cc1ccccc1",
+            "",
+            "[Cu]",
+            "",
+            "",
+            "0.006"
+          ]
+        },
+        "children": [
+          {
+            "id": "Treecl9xoo",
+            "icon": "blob:http://localhost:8848/c0fcb0e9-2519-479e-8a20-3e8cd05ec20c",
+            "smiles": "CCNCC",
+            "x": 0,
+            "y": 280,
+            "depth": 2,
+            "shape": "custom-node",
+            "size": [
+              200,
+              60
+            ],
+            "anchorPoints": [
+              [
+                0.5,
+                0
+              ],
+              [
+                0.5,
+                1
+              ]
+            ]
+          },
+          {
+            "id": "Tree1j47pi2",
+            "icon": "blob:http://localhost:8848/3051a2fb-8160-441a-98f0-d12f58980ace",
+            "smiles": "Cc1cccc(C)c1NC(=O)CCl",
+            "x": 280,
+            "y": 280,
+            "depth": 2,
+            "shape": "custom-node",
+            "size": [
+              200,
+              60
+            ],
+            "anchorPoints": [
+              [
+                0.5,
+                0
+              ],
+              [
+                0.5,
+                1
+              ]
+            ]
+          }
+        ],
+        "x": 140,
+        "y": 140,
+        "depth": 1,
+        "shape": "custom-node",
+        "size": [
+          200,
+          60
+        ],
+        "anchorPoints": [
+          [
+            0.5,
+            0
+          ],
+          [
+            0.5,
+            1
+          ]
+        ]
+      }
+    ],
+    "x": 140,
+    "y": 0,
+    "depth": 0,
+    "shape": "custom-node",
+    "size": [
+      200,
+      60
+    ],
+    "anchorPoints": [
+      [
+        0.5,
+        0
+      ],
+      [
+        0.5,
+        1
+      ]
+    ]
+  },
+  "edges": [
+    {
+      "source": "Tree1y6cg47",
+      "target": "#1"
+    },
+    {
+      "source": "#1",
+      "target": "Treecl9xoo"
+    },
+    {
+      "source": "#1",
+      "target": "Tree1j47pi2"
+    }
+  ]
+}

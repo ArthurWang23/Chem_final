@@ -1,0 +1,19 @@
+{
+  "name": "chemistry_server",
+  "version": "1.0.0",
+  "main": "app.js",
+  "scripts": {
+    "dev": "node app.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "ketcher-core": "2.7.2",
+    "ketcher-standalone": "2.6.4",
+    "nodejs-websocket": "^1.7.2",
+    "socket.io-client": "^4.8.1"
+  }
+}

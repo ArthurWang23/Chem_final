@@ -1,0 +1,38 @@
+{
+  "id": "Modeling Methods",
+  "children": [
+    {
+      "id": "Classification",
+      "children": [
+        {
+          "id": "Logistic regression"
+        },
+        {
+          "id": "Linear discriminant analysis"
+        }
+      ]
+    },
+    {
+      "id": "Consensus",
+      "children": [
+        {
+          "id": "Models diversity"
+        },
+        {
+          "id": "Methods"
+        }
+      ]
+    },
+    {
+      "id": "Regression",
+      "children": [
+        {
+          "id": "Multiple linear regression"
+        },
+        {
+          "id": "Partial least squares"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+	"dependencies": {
+		"@types/uuid": "^10.0.0",
+		"ketcher-core": "2.7.2",
+		"ketcher-standalone": "2.6.4",
+		"uuid": "^11.1.0"
+	}
+}

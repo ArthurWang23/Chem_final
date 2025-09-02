@@ -1,0 +1,139 @@
+芯片式反应阵列2.0
+上位机SPEC
+
+目录
+一、上位机平台整体方案	3
+1.1 功能需求汇总	3
+1.2 平台硬件拓扑	3
+1.3 用户操作流程	4
+二、上位机与控制系统通信方案	5
+3.1 控制需求汇总	5
+3.2 单路反应寄存器安排	5
+3.3 上位机与控制主板通信方案	7
+
+一、上位机平台整体方案
+1.2 平台硬件拓扑
+	实验平台共设立七个反应路径，包括低温模块、单步加热模块、两步加热模块、光反应模块、液液分离模块、固定化床模块和气液反应模块，各模块位置以及器件摆放方案如下图所示。
+	每一路反应均由一块控制主板进行控制，另有一块控制主板通过两个光口与上位机通信，八块控制主板通过光口连成环网，平台控制板的通信连接图如下图所示。蓝线代表光纤。
+
+1.3 用户操作流程
+	用户从自己的设备通过互联网登录至实验平台，验证身份后进入实验界面，实验界面显示当前平台的路径空闲状态。用户选择空闲路径后，平台将该路径锁定为实验状态，并要求用户选择自动实验或手动实现，完成选择后进入器件界面。若用户选择自动实验，需导入实验方案，器件界面的操作接口被锁定；若用户选择手动实验，则器件界面开放操作接口，支持用户进行实时操作。整个实验过程中，器件的状态都将实时显示并记录。用户选择结束实验后，路径进行自动清洗，完成清洗后该路径解锁为空闲状态，实验页面跳转至实验记录页面。
+	
+二、上位机与控制系统通信方案
+2.1 控制需求汇总
+	七个大模块分别涉及到的器件如下表所示：
+模块名	泵	阀	温度控制	特殊
+液液分离	6	4	4	
+制冷	3	2	1	
+单步加热	2	2	2	
+两步加热	5	3	4	
+固定化床	2	3	7	
+气液反应	5	3	4	mfc
+光反应	2	2	0	光控制
+各模块器件表
+	统计后可知单个反应模块最多需要6个泵、4个阀、1个MFC、1个光照、7个加热。每种器件包含控制信息与当前信息两种信息，控制信息是操作者下达的控制指令，当前信息是该器件的当前状态。
+	泵的控制信息包括：初始化、停止指令、活塞移动速度、活塞目标位置、导通端口；泵的当前信息包括活塞当前位置。
+	阀的控制信息是输出空位，阀不包含当前信息。
+	MFC的控制信息是气体流速，MFC的当前信息是当前流速。
+	光照模块的控制信息的光照强度，当前信息是当前光强。
+	加热模块的控制信息包括：设定温度、加热速度。加热模块的当前信息是当前温度。
+2.2 单路反应寄存器安排
+上位机—>主控制器：
+（下面由上到下为帧格式依次的顺序）
+6byte：（校验数据）aa bb cc dd ee ff
+8byte：（包头）3bit（MCR）+1bit（Type）+2byte（TDMA周期）+2bit（DMC）+6bit（Cluster_mode）+1byte（子控制器数量）+28bit（CRC）
+8byte：（第一个子控制器时隙包头）1byte（ID号）+2byte（数据起始位置）+1byte（时隙位置）+2byte（Slot起始时间）+2byte（Slot结束时间）
+8byte：（第二个子控制器时隙包头）1byte（ID号）+2byte（数据起始位置）+1byte（时隙位置）+2byte（Slot起始时间）+2byte（Slot结束时间）
+8byte：（第三个子控制器时隙包头）1byte（ID号）+2byte（数据起始位置）+1byte（时隙位置）+2byte（Slot起始时间）+2byte（Slot结束时间）
+8byte：（第四个子控制器时隙包头）1byte（ID号）+2byte（数据起始位置）+1byte（时隙位置）+2byte（Slot起始时间）+2byte（Slot结束时间）
+8byte：（第五个子控制器时隙包头）1byte（ID号）+2byte（数据起始位置）+1byte（时隙位置）+2byte（Slot起始时间）+2byte（Slot结束时间）
+8byte：（第六个子控制器时隙包头）1byte（ID号）+2byte（数据起始位置）+1byte（时隙位置）+2byte（Slot起始时间）+2byte（Slot结束时间）
+8byte：（第七个子控制器时隙包头）1byte（ID号）+2byte（数据起始位置）+1byte（时隙位置）+2byte（Slot起始时间）+2byte（Slot结束时间）
+8byte：（第八个子控制器时隙包头）1byte（ID号）+2byte（数据起始位置）+1byte（时隙位置）+2byte（Slot起始时间）+2byte（Slot结束时间）
+8byte：（第九个子控制器时隙包头）1byte（ID号）+2byte（数据起始位置）+1byte（时隙位置）+2byte（Slot起始时间）+2byte（Slot结束时间）
+8byte：（第十个子控制器时隙包头）1byte（ID号）+2byte（数据起始位置）+1byte（时隙位置）+2byte（Slot起始时间）+2byte（Slot结束时间）
+16*8byte：（第一个子控制器设备控制数据）Data1（8byte）+ Data2（8byte）+ Data3（8byte）+ Data4（8byte）+ Data5（8byte）+ Data6（8byte）+ Data7（8byte）+ Data8（8byte）+ Data9（8byte）+ Data10（8byte）+ Data11（8byte）+ Data12（8byte）+ Data13（8byte）+ Data14（8byte）+ Data15（8byte）+ Data16（8byte）
+
+16*8byte：（第一个子控制器设备控制数据）Data1（8byte）+ Data2（8byte）+ Data3（8byte）+ Data4（8byte）+ Data5（8byte）+ Data6（8byte）+ Data7（8byte）+ Data8（8byte）+ Data9（8byte）+ Data10（8byte）+ Data11（8byte）+ Data12（8byte）+ Data13（8byte）+ Data14（8byte）+ Data15（8byte）+ Data16（8byte）
+
+16*8byte：（第二个子控制器设备控制数据）Data1（8byte）+ Data2（8byte）+ Data3（8byte）+ Data4（8byte）+ Data5（8byte）+ Data6（8byte）+ Data7（8byte）+ Data8（8byte）+ Data9（8byte）+ Data10（8byte）+ Data11（8byte）+ Data12（8byte）+ Data13（8byte）+ Data14（8byte）+ Data15（8byte）+ Data16（8byte）
+
+16*8byte：（第三个子控制器设备控制数据）Data1（8byte）+ Data2（8byte）+ Data3（8byte）+ Data4（8byte）+ Data5（8byte）+ Data6（8byte）+ Data7（8byte）+ Data8（8byte）+ Data9（8byte）+ Data10（8byte）+ Data11（8byte）+ Data12（8byte）+ Data13（8byte）+ Data14（8byte）+ Data15（8byte）+ Data16（8byte）
+
+16*8byte：（第四个子控制器设备控制数据）Data1（8byte）+ Data2（8byte）+ Data3（8byte）+ Data4（8byte）+ Data5（8byte）+ Data6（8byte）+ Data7（8byte）+ Data8（8byte）+ Data9（8byte）+ Data10（8byte）+ Data11（8byte）+ Data12（8byte）+ Data13（8byte）+ Data14（8byte）+ Data15（8byte）+ Data16（8byte）
+
+16*8byte：（第五个子控制器设备控制数据）Data1（8byte）+ Data2（8byte）+ Data3（8byte）+ Data4（8byte）+ Data5（8byte）+ Data6（8byte）+ Data7（8byte）+ Data8（8byte）+ Data9（8byte）+ Data10（8byte）+ Data11（8byte）+ Data12（8byte）+ Data13（8byte）+ Data14（8byte）+ Data15（8byte）+ Data16（8byte）
+
+16*8byte：（第六个子控制器设备控制数据）Data1（8byte）+ Data2（8byte）+ Data3（8byte）+ Data4（8byte）+ Data5（8byte）+ Data6（8byte）+ Data7（8byte）+ Data8（8byte）+ Data9（8byte）+ Data10（8byte）+ Data11（8byte）+ Data12（8byte）+ Data13（8byte）+ Data14（8byte）+ Data15（8byte）+ Data16（8byte）
+
+16*8byte：（第七个子控制器设备控制数据）Data1（8byte）+ Data2（8byte）+ Data3（8byte）+ Data4（8byte）+ Data5（8byte）+ Data6（8byte）+ Data7（8byte）+ Data8（8byte）+ Data9（8byte）+ Data10（8byte）+ Data11（8byte）+ Data12（8byte）+ Data13（8byte）+ Data14（8byte）+ Data15（8byte）+ Data16（8byte）
+
+16*8byte：（第八个子控制器设备控制数据）Data1（8byte）+ Data2（8byte）+ Data3（8byte）+ Data4（8byte）+ Data5（8byte）+ Data6（8byte）+ Data7（8byte）+ Data8（8byte）+ Data9（8byte）+ Data10（8byte）+ Data11（8byte）+ Data12（8byte）+ Data13（8byte）+ Data14（8byte）+ Data15（8byte）+ Data16（8byte）
+
+16*8byte：（第九个子控制器设备控制数据）Data1（8byte）+ Data2（8byte）+ Data3（8byte）+ Data4（8byte）+ Data5（8byte）+ Data6（8byte）+ Data7（8byte）+ Data8（8byte）+ Data9（8byte）+ Data10（8byte）+ Data11（8byte）+ Data12（8byte）+ Data13（8byte）+ Data14（8byte）+ Data15（8byte）+ Data16（8byte）
+
+16*8byte：（第十个子控制器设备控制数据）Data1（8byte）+ Data2（8byte）+ Data3（8byte）+ Data4（8byte）+ Data5（8byte）+ Data6（8byte）+ Data7（8byte）+ Data8（8byte）+ Data9（8byte）+ Data10（8byte）+ Data11（8byte）+ Data12（8byte）+ Data13（8byte）+ Data14（8byte）+ Data15（8byte）+ Data16（8byte）
+
+注：其中Data1-16（各控制器）定义如下：
+
+Data1：泵1速度（2byte）+泵1位置（2byte）+泵类型（3bit）+泵1 ID号（3bit）+泵1初始化设置（1bit）+泵1停止设置（1bit）+泵1端口（1byte）+泵2速度（2byte）
+
+Data2：泵2位置（2byte）+泵类型（3bit）+泵2 ID号（3bit）+泵2初始化设置（1bit）+泵2停止设置（1bit）+泵2端口（1byte）+泵3速度（2byte）+泵3位置（2byte）
+
+Data3：泵3类型（3bit）+泵3 ID号（3bit）+泵3初始化设置（1bit）+泵3停止设置（1bit）+泵3端口（1byte）+泵4速度（2byte）+ 泵4位置（2byte）+泵类型（3bit）+泵4 ID号（3bit）+泵4初始化设置（1bit）+泵4停止设置（1bit）+泵4端口（1byte）
+
+Data4：泵5速度（2byte）+泵5位置（2byte）+泵类型（3bit）+泵5 ID号（3bit）+泵5初始化设置（1bit）+泵5停止设置（1bit）+泵5端口（1byte）+泵6速度（2byte）
+泵6位置（2byte）+泵类型（3bit）+泵6 ID号（3bit）+泵6初始化设置（1bit）+泵6停止设置（1bit）+泵6端口（1byte）
+
+Data5：泵6位置（2byte）+泵类型（3bit）+泵6 ID号（3bit）+泵6初始化设置（1bit）+泵6停止设置（1bit）+泵6端口（1byte）+阀1类型（3bit）+阀1ID（3bit）+冗余（2bit）+阀1孔位（1byte）+阀2类型（3bit） +阀2 ID号（3bit）+冗余（2bit）+阀2孔位（1byte）
+
+Data6：阀3类型（3bit）+阀3 ID（3bit）+冗余（2bit）+阀3孔位（1byte）+阀4类型（3bit） +阀4 ID号（3bit）+冗余（2bit）+阀4孔位（1byte）+MFC类型（3bit）+MFC ID（3bit）+冗余（2bit）+MFC流量（2byte）+光照类型（3bit）+光照 ID号（3bit）+冗余（2bit）
+
+Data7：光强设置（2byte）+ 加热1类型（3bit）+加热1 ID号（3bit）+冗余（2bit）+加热1速度（1byte）+加热1温度（2byte）+加热2类型（3bit）+加热2 ID号（3bit）+冗余（2bit）+加热2速度（1byte）
+
+Data8：加热2温度（2byte）+加热3类型（3bit）+加热3 ID号（3bit）+冗余（2bit）+加热3速度（1byte）+加热3温度（2byte）+加热4类型（3bit）+加热4 ID号（3bit）+冗余（2bit）+加热4速度（1byte）
+
+Data9：加热4温度（2byte）+加热5类型（3bit）+加热5 ID号（3bit）+冗余（2bit）+加热5速度（1byte）+加热5温度（2byte）+加热6类型（3bit）+加热6 ID号（3bit）+冗余（2bit）+加热6速度（1byte）
+
+Data10：加热6温度（2byte）+加热7类型（3bit）+加热7 ID号（3bit）+冗余（2bit）+加热7速度（1byte）+加热7温度（2byte）+冗余（2byte）
+
+Data1-16为冗余部分（可填入1-6作为测试使用，也可为后续开发留有空间）
+冗余部分均填入0即可 
+
+主控制器->上位机
+
+8’h00+Locol_ID(1byte)+8’h00+8’h00+8’h00+8’h00
+Header1:MCR(3bit)+Type(1bit)+Global_time(2byte)+Locol_ID(8bit)+Slot_position(8bit)+membership+Temperature(2byte)
+注：membership=Protocol_Error_Flag(1bit)+Syn_Error_Flag(1bit)+Communication_Flag(1bit)+Bit_Error_Flag(4bit)+MEDL_CRC_Flag(1bit)+Protocol_State(4bit)
+Header2:Slot_Start_Time(2byte)+Slot_End_Time(2byte)+0(4byte)
+
+其余均为实际反馈数据，格式类型有上述的Data1-10相同,共有10个64位
+
+加热2：
+类型：reg13【15：13】 ID：reg13【12：10】 冗余：reg13【9：8】 
+速度：reg13【7：0】 温度：reg14【31：16】
+
+加热3：
+类型：reg14【15：13】 ID：reg14【12：10】 冗余：reg14【9：8】 
+速度：reg14【7：0】 温度：reg15【31：16】
+
+加热4：
+类型：reg15【15：13】 ID：reg15【12：10】 冗余：reg15【9：8】 
+速度：reg15【7：0】 温度：reg16【31：16】
+
+加热5：
+类型：reg16【15：13】 ID：reg16【12：10】 冗余：reg16【9：8】 
+速度：reg16【7：0】 温度：reg17【31：16】
+
+加热6：
+类型：reg17【15：13】 ID：reg17【12：10】 冗余：reg17【9：8】 
+速度：reg17【7：0】 温度：reg18【31：16】
+
+加热7：
+类型：reg18【15：13】 ID：reg18【12：10】 冗余：reg18【9：8】 
+速度：reg18【7：0】 温度：reg19【31：16】
+2.3 上位机与控制主板通信方案
+	由下图可知上位机与控制主板8通过一路光纤直接连接，控制主板8不承担反应路径控制，是控制环网与上位机的通信枢纽。
+
+	上位机与控制器的通信依托于3.2中的寄存器内数据，为了方便组包与分包，七路反应对应的寄存器都按照器件数量最大值做准备，即每一路均有6个泵、4个阀、1个MFC、1个光照、7个加热所需的寄存器。
+对于控制信息，当用户进行器件操作时，上位机需要实时更新对应器件的寄存器控制信息，并在更新后通过网络输出。对于当前信息，控制主板8会每隔0.2s（暂定）上报一次控制环网的所有器件当前状态，上位机可以据此更新数据。
