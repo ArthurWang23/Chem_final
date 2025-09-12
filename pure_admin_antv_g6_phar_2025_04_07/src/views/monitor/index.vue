@@ -47,7 +47,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount, onActivated, onDeactivated, watch } from "vue";
+import { ref, onMounted, onBeforeUnmount, onActivated, onDeactivated, watch, nextTick} from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import axios from "axios";
 import { useRunningTasksStore } from "@/store/modules/runningTasks";
@@ -58,6 +58,13 @@ const isLoading = ref(true);
 const hasError = ref(false);
 const isRefreshing = ref(false);
 const monitorIframe = ref(null);
+// 新增：iframe 就绪与队列
+const iframeReady = ref(false);
+const pendingMessages = ref([]); // { type, data, ... }
+const loggedWarnTypes = new Set();
+
+// 广播抑制标志，用于避免“iframe -> 容器 -> iframe”的回声环
+const suppressBroadcast = ref(false)
 
 // ✅ 页面状态管理store
 const pageStateStore = usePageStateStore();
@@ -109,7 +116,43 @@ const restorePageState = () => {
     console.warn('❌ 恢复Monitor页面状态失败:', error);
   }
 };
+// 安全发送：未就绪则入队，就绪则直接发送
+const safePostToIframe = (msg) => {
+  if (monitorIframe.value && monitorIframe.value.contentWindow && iframeReady.value) {
+    try {
+      monitorIframe.value.contentWindow.postMessage(msg, 'http://localhost:8850');
+    } catch (e) {
+      console.error('❌ 向 iframe 发送消息失败（将入队重试）:', e);
+      pendingMessages.value.push(msg);
+    }
+  } else {
+    // 入队并避免重复刷屏
+    pendingMessages.value.push(msg);
+    if (msg && msg.type && !loggedWarnTypes.has(msg.type)) {
+      console.log(`⚠️ iframe未准备好，已暂存 ${msg.type} 消息，待就绪后统一转发`);
+      loggedWarnTypes.add(msg.type);
+    }
+  }
+};
 
+// 统一冲刷队列
+const flushPendingMessages = () => {
+  if (!(monitorIframe.value && monitorIframe.value.contentWindow && iframeReady.value)) return;
+  const queue = [...pendingMessages.value];
+  pendingMessages.value = [];
+  loggedWarnTypes.clear();
+  queue.forEach((m) => {
+    try {
+      monitorIframe.value.contentWindow.postMessage(m, 'http://localhost:8850');
+    } catch (e) {
+      console.error('❌ 冲刷消息失败，将保留在队列中:', e, m);
+      pendingMessages.value.push(m);
+    }
+  });
+  if (queue.length > 0) {
+    console.log(`✅ 已向 iframe 冲刷 ${queue.length} 条积压消息`);
+  }
+};
 // 处理iframe加载完成
 const handleIframeLoad = () => {
   console.log("✅ iframe加载完成");
@@ -123,9 +166,11 @@ const handleIframeLoad = () => {
   const now = Date.now();
   const shouldInitialize = !iframeInitialized.value || (now - lastLoadTime.value > RELOAD_COOLDOWN);
   
-  if (!shouldInitialize) {
+   if (!shouldInitialize) {
     console.log('📋 iframe已初始化且在冷却期内，跳过重复初始化');
     setupIframeCommunication();
+    // 主动发送就绪检查
+    safePostToIframe({ type: 'IFRAME_READY_CHECK', timestamp: new Date().toISOString() });
     return;
   }
   
@@ -136,34 +181,27 @@ const handleIframeLoad = () => {
   setTimeout(() => {
     setupIframeCommunication();
     
+    // 主动发送就绪检查
+    safePostToIframe({ type: 'IFRAME_READY_CHECK', timestamp: new Date().toISOString() });
     // 🎯 只在首次加载或明确需要时才自动加载结构
     if (!iframeInitialized.value) {
       setTimeout(() => {
-        if (monitorIframe.value && monitorIframe.value.contentWindow) {
-          try {
-            console.log('🎯 首次初始化：自动触发加载第一个可用的自定义结构');
-            
-            monitorIframe.value.contentWindow.postMessage({
-              type: 'AUTO_LOAD_STRUCTURE',
-              data: JSON.stringify({
-                action: 'loadFirstAvailableStructure',
-                reason: 'first_load',
-                timestamp: new Date().toISOString()
-              })
-            }, 'http://localhost:8850');
-            
-            console.log('✅ 已发送首次自动加载结构消息到iframe');
-            iframeInitialized.value = true;
-          } catch (error) {
-            console.error('❌ 发送自动加载结构消息失败:', error);
-          }
-        }
-      }, 1000); // 给iframe内部初始化足够时间
+        console.log('🎯 首次初始化：自动触发加载第一个可用的自定义结构');
+        safePostToIframe({
+          type: 'AUTO_LOAD_STRUCTURE',
+          data: JSON.stringify({
+            action: 'loadFirstAvailableStructure',
+            reason: 'first_load',
+            timestamp: new Date().toISOString()
+          })
+        });
+        console.log('✅ 已发送首次自动加载结构消息到iframe');
+        iframeInitialized.value = true;
+      }, 1000);
     } else {
       console.log('📋 iframe已初始化，跳过自动加载结构');
       iframeInitialized.value = true;
     }
-    
   }, 500); // 给iframe一些加载时间
 };
 
@@ -185,6 +223,12 @@ const setupIframeCommunication = () => {
   
   // 发送完整store状态到iframe的辅助函数
   const sendStoreStateToIframe = () => {
+    // 抑制中则跳过本次广播
+    if (suppressBroadcast.value) {
+      console.log('🔇 抑制中，跳过 WORKFLOW_UPDATE 广播');
+      return;
+    }
+
     if (monitorIframe.value && monitorIframe.value.contentWindow) {
       try {
         const runningTasksStore = useRunningTasksStore();
@@ -226,54 +270,47 @@ const setupIframeCommunication = () => {
         const workflowStatus = runningTasksStore?.workflowStatus || 'idle';
         const expectedStates = runningTasksStore?.getExpectedStates || new Map();
         const actualStates = runningTasksStore?.getActualStates || new Map();
-        
-        // 构建可序列化的状态对象
-        const storeState = {
-          runningTasks: deepSerialize(runningTasks),
-          currentWorkflow: deepSerialize(currentWorkflow),
-          workflowStatus: workflowStatus,
+
+        // 构建 iframe 端期望的字段名（兼容 monitor-standalone 的 handleWorkflowUpdate）
+        const workflowUpdatePayload = {
+          workflow: deepSerialize(currentWorkflow),
+          status: workflowStatus,
           expectedStates: deepSerialize(expectedStates),
           actualStates: deepSerialize(actualStates),
           timestamp: new Date().toISOString()
         };
-        
-        // 发送工作流信息到monitor-standalone
-        monitorIframe.value.contentWindow.postMessage({
-          type: 'WORKFLOW_UPDATE',
-          data: storeState
-        }, 'http://localhost:8850');
-        
-        console.log('🎯 已发送完整store状态到监控界面');
+
+        // 使用安全发送（注意这里改为发送 workflow/status 字段）
+        safePostToIframe({ type: 'WORKFLOW_UPDATE', data: workflowUpdatePayload });
+        console.log('🎯 已发送工作流状态到监控界面（workflow/status 字段，对齐子页面）');
       } catch (error) {
         console.error('发送store状态失败:', error);
-        // 发送一个最小的状态对象作为备用
-        try {
-          monitorIframe.value.contentWindow.postMessage({
-            type: 'WORKFLOW_UPDATE',
-            data: {
-              runningTasks: [],
-              currentWorkflow: null,
-              workflowStatus: 'idle',
-              expectedStates: {},
-              actualStates: {},
-              timestamp: new Date().toISOString(),
-              error: error.message
-            }
-          }, 'http://localhost:8850');
-        } catch (fallbackError) {
-          console.error('发送备用状态也失败:', fallbackError);
-        }
+        // 失败兜底（保持字段名一致）
+        safePostToIframe({
+          type: 'WORKFLOW_UPDATE',
+          data: {
+            workflow: null,
+            status: 'idle',
+            expectedStates: {},
+            actualStates: {},
+            timestamp: new Date().toISOString(),
+            error: error.message
+          }
+        });
       }
     }
   };
   
   // 监听工作流状态变化
   watch(() => runningTasksStore.getCurrentWorkflowInfo, (newWorkflow) => {
+    if (suppressBroadcast.value) return;
     sendStoreStateToIframe();
   }, { immediate: true, deep: true });
-  
+
   // 监听运行任务变化
   watch(() => runningTasksStore.runningTasks, (newTasks) => {
+    if (suppressBroadcast.value) return;
+
     if (monitorIframe.value && monitorIframe.value.contentWindow) {
       try {
         // 深度序列化任务数据
@@ -309,38 +346,30 @@ const setupIframeCommunication = () => {
         
         const serializedTasks = serializeTasks(newTasks || []);
         
-        monitorIframe.value.contentWindow.postMessage({
-          type: 'RUNNING_TASKS_UPDATE',
-          data: serializedTasks
-        }, 'http://localhost:8850');
-        
-        console.log('🎯 已发送运行任务更新:', serializedTasks.length, '个任务');
+        safePostToIframe({ type: 'RUNNING_TASKS_UPDATE', data: serializedTasks });
+        console.log('🎯 已发送运行任务更新（安全发送）:', serializedTasks.length, '个任务');
       } catch (error) {
         console.error('发送运行任务更新失败:', error);
-        // 发送空数组作为备用
-        try {
-          monitorIframe.value.contentWindow.postMessage({
-            type: 'RUNNING_TASKS_UPDATE',
-            data: []
-          }, 'http://localhost:8850');
-        } catch (fallbackError) {
-          console.error('发送备用任务数据也失败:', fallbackError);
-        }
+        safePostToIframe({ type: 'RUNNING_TASKS_UPDATE', data: [] });
       }
     }
   }, { immediate: true, deep: true });
-  
-  // 监听工作流状态变化
+
+  // 监听工作流总体状态
   watch(() => runningTasksStore.workflowStatus, () => {
+    if (suppressBroadcast.value) return;
     sendStoreStateToIframe();
   }, { immediate: true });
-  
-  // 监听设备状态变化
+
+  // 监听期望设备状态
   watch(() => runningTasksStore.getExpectedStates, () => {
+    if (suppressBroadcast.value) return;
     sendStoreStateToIframe();
   }, { immediate: true, deep: true });
-  
+
+  // 监听实际设备状态
   watch(() => runningTasksStore.getActualStates, () => {
+    if (suppressBroadcast.value) return;
     sendStoreStateToIframe();
   }, { immediate: true, deep: true });
   
@@ -348,7 +377,7 @@ const setupIframeCommunication = () => {
 };
 
 // 处理来自iframe的消息
-const handleIframeMessage = (event) => {
+const handleIframeMessage = async (event) => {
   // 验证来源
   if (event.origin !== 'http://localhost:8850') {
     return;
@@ -357,16 +386,38 @@ const handleIframeMessage = (event) => {
   try {
     const { type, data } = event.data;
     const runningTasksStore = useRunningTasksStore();
-    
+
     switch (type) {
       case 'monitor-ready':
         console.log("✅ Monitor页面已准备就绪");
-        // iframe加载完成后立即发送当前状态
-        setTimeout(() => {
-          setupIframeCommunication();
-        }, 100);
+        iframeReady.value = true;
+        // 一次性冲刷积压消息
+        flushPendingMessages();
+        // 保持原有逻辑
+        setTimeout(() => { setupIframeCommunication(); }, 100);
+        if (window.parent !== window) {
+          try {
+            window.parent.postMessage(
+              { type: 'monitor-ready', timestamp: new Date().toISOString() },
+              window.location.origin
+            );
+            console.log('✅ 已将 monitor-ready 转发给任务页面');
+          } catch (err) {
+            console.warn('⚠️ monitor-ready 转发失败：', err);
+          }
+        }
         break;
-        
+      
+      case 'IFRAME_READY_RESPONSE':
+        console.log("✅ 收到iframe准备状态响应");
+        iframeReady.value = true;
+        flushPendingMessages();
+        // 转发到任务页面（保留原有逻辑）
+        if (window.parent !== window) {
+          window.parent.postMessage(event.data, window.location.origin);
+        }
+        break;
+      
       case 'device-selected':
         console.log("设备已选择:", data);
         break;
@@ -376,11 +427,18 @@ const handleIframeMessage = (event) => {
         break;
         
       case 'DEVICE_STATE_UPDATE':
-        // 处理来自iframe的设备状态更新
+        // 处理来自iframe的设备状态更新（会写本地store）
         if (data && data.deviceId && data.actualState) {
           console.log("📡 收到设备状态更新:", data);
-          if (runningTasksStore && typeof runningTasksStore.updateActualHardwareState === 'function') {
-            runningTasksStore.updateActualHardwareState(data.deviceId, data.actualState);
+          // 开启抑制，避免 watchers 立即把相同数据回发给 iframe
+          suppressBroadcast.value = true;
+          try {
+            if (runningTasksStore && typeof runningTasksStore.updateActualHardwareState === 'function') {
+              runningTasksStore.updateActualHardwareState(data.deviceId, data.actualState);
+            }
+          } finally {
+            await nextTick();
+            suppressBroadcast.value = false;
           }
         }
         break;
@@ -447,9 +505,12 @@ const refreshIframe = (forceReload = false) => {
   console.log('🔄 执行硬刷新：重新加载iframe');
   isLoading.value = true;
   hasError.value = false;
-  
-  // 重置状态，允许重新初始化
   iframeInitialized.value = false;
+  
+  // 新增：重置就绪与队列
+  iframeReady.value = false;
+  pendingMessages.value = [];
+  loggedWarnTypes.clear();
   
   if (monitorIframe.value) {
     monitorIframe.value.src = monitorIframe.value.src;
@@ -528,26 +589,11 @@ const setupGlobalMessageListening = () => {
      ];
     
     if (messagesToForward.includes(event.data.type)) {
-      // 延迟转发，确保iframe已经准备好
-      const forwardMessage = () => {
-        if (monitorIframe.value && monitorIframe.value.contentWindow) {
-          try {
-            console.log(`🎯 转发${event.data.type}消息到iframe:`, event.data);
-            monitorIframe.value.contentWindow.postMessage(event.data, 'http://localhost:8850');
-            console.log(`✅ ${event.data.type}消息转发成功`);
-          } catch (error) {
-            console.error(`❌ 转发${event.data.type}消息失败:`, error);
-            // 如果转发失败，延迟重试
-            setTimeout(forwardMessage, 1000);
-          }
-        } else {
-          console.log(`⚠️ iframe未准备好，延迟转发${event.data.type}消息`);
-          setTimeout(forwardMessage, 500);
-        }
-      };
-      
-      // 立即尝试转发，如果失败会自动重试
-      forwardMessage();
+      const msg = event.data;
+      // 使用安全发送：未就绪则入队
+      safePostToIframe(msg);
+      // 轻量定时尝试冲刷（不递归）
+      setTimeout(flushPendingMessages, 500);
     }
   });
   
@@ -604,6 +650,10 @@ onBeforeUnmount(() => {
   
   // 移除消息监听器
   window.removeEventListener('message', handleIframeMessage);
+  // 新增：清理队列与就绪
+  pendingMessages.value = [];
+  loggedWarnTypes.clear();
+  iframeReady.value = false;
 });
 </script>
 
@@ -743,4 +793,4 @@ onBeforeUnmount(() => {
     justify-content: flex-end;
   }
 }
-</style> 
+</style>

@@ -4,46 +4,6 @@
     <!-- 工具栏 - 始终显示，包含创建模式和反应路径按钮 -->
     <div class="toolbar">
       
-      <!-- 🎯 运行状态指示器 - 新增 -->
-      <div v-if="runningTasks.length > 0 || isWorkflowRunning" class="running-tasks-indicator">
-        <div class="indicator-header">
-          <span class="indicator-title">
-            <span v-if="isWorkflowRunning" class="workflow-badge">工作流执行中</span>
-            正在运行 ({{ runningTasks.length }})
-          </span>
-          <button class="toggle-details-btn" @click="showRunningDetails = !showRunningDetails">
-            {{ showRunningDetails ? '隐藏' : '详情' }}
-          </button>
-        </div>
-        <div v-if="showRunningDetails" class="running-tasks-details">
-          <!-- 🎯 工作流状态信息 -->
-          <div v-if="isWorkflowRunning && runningTasksStore.getCurrentWorkflowInfo" class="workflow-status">
-            <div class="workflow-info">
-              <span class="workflow-id">工作流: {{ runningTasksStore.getCurrentWorkflowInfo.id }}</span>
-              <span class="workflow-progress">
-                {{ runningTasksStore.getCurrentWorkflowInfo.currentTaskIndex + 1 }}/{{ runningTasksStore.getCurrentWorkflowInfo.totalTasks }}
-              </span>
-            </div>
-            <div class="workflow-metrics">
-              <span class="expected-devices">期望设备状态: {{ runningTasksStore.getExpectedStates.size }}</span>
-              <span class="actual-devices">实际设备状态: {{ runningTasksStore.getActualStates.size }}</span>
-            </div>
-          </div>
-          
-          <!-- 任务列表 -->
-          <div v-for="task in runningTasks" :key="`${task.taskId}-${task.taskKey}`" class="running-task-item">
-            <div class="task-info">
-              <span class="task-name">{{ task.taskName }}</span>
-              <span class="task-progress">{{ task.progress || 0 }}%</span>
-            </div>
-            <div class="task-status">
-              <span class="current-device" v-if="task.currentDevice">当前: {{ task.currentDevice }}</span>
-              <span class="task-time">{{ formatRunTime(task.startedAt) }}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-      
       <!-- 创建反应路径按钮 - 非编辑模式显示 -->
       <button 
         v-if="isAdmin && !isEditMode"
@@ -463,6 +423,54 @@
         </div>
       </div>
     </div>
+    <!-- 右侧：任务队列面板（新增） -->
+    <div class="task-queue-panel" v-if="isWorkflowRunning && runningTasksStore.getCurrentWorkflowInfo">
+      <div class="panel-header" @click="isPanelOpen = !isPanelOpen">
+        <div class="title">
+          <span class="dot"></span>
+          正在运行与即将运行
+        </div>
+        <button class="toggle-btn">{{ isPanelOpen ? '收起' : '展开' }}</button>
+      </div>
+      <transition name="fade">
+        <div v-show="isPanelOpen" class="panel-body">
+          <div class="section">
+            <div class="section-title">正在运行</div>
+            <div class="current-task">
+              <div class="task-name" :title="currentTaskName">
+                {{ currentTaskName || '未知任务' }}
+              </div>
+              <div class="progress">
+                进度：{{ currentTaskIndex + 1 }}/{{ totalTasks }}
+              </div>
+            </div>
+          </div>
+          <div class="divider"></div>
+          <div class="section">
+            <div class="section-title">即将运行</div>
+            <div v-if="upcomingTasksPreview.length === 0" class="empty">暂无后续任务</div>
+            <ul v-else class="task-list">
+              <li v-for="(t, i) in upcomingTasksPreview" :key="i" :title="t">
+                <span class="badge">{{ currentTaskIndex + 2 + i }}</span>
+                <span class="name">{{ t }}</span>
+              </li>
+            </ul>
+            <div v-if="upcomingTasksCount > upcomingTasksPreview.length" class="more">
+              还有 {{ upcomingTasksCount - upcomingTasksPreview.length }} 个任务…
+            </div>
+          </div>
+          <div class="divider"></div>
+          <div class="section meta">
+            <div class="meta-item">
+              队列长度：{{ runningQueueLength }}
+            </div>
+            <div class="meta-item">
+              工作流ID：{{ (currentWorkflow && currentWorkflow.id) || '-' }}
+            </div>
+          </div>
+        </div>
+      </transition>
+    </div>
   </div>
 </template>
 
@@ -471,14 +479,56 @@ import { ref, onMounted, onBeforeUnmount, computed, watch, reactive } from "vue"
 import { Graph } from "@antv/g6";
 import { useAppStoreHook } from "@/store/modules/app";
 import axios from "axios";
-import { saveAs } from 'file-saver'; // 需要安装 file-saver 库用于保存文件
 import { ElMessage,ElMessageBox } from 'element-plus';
 import { useRoute, useRouter } from 'vue-router';
 // 🎯 引入runningTasks store
 import { useRunningTasksStore } from '@/store/modules/runningTasks'
 
+// 通过共享连接管理器复用连接
+import sharedConnectionManager from "@/utils/sharedConnectionManager.js"
+
 // 🎯 初始化store
 const runningTasksStore = useRunningTasksStore()
+
+// 将共享连接的 message 直接复用到原有的 handleWsMessage
+const handleDeviceMessage = (data) => {
+  try {
+    handleWsMessage(data);
+  } catch (e) {
+    console.error('handleDeviceMessage error:', e);
+  }
+};
+
+// 连接/断开事件 -> 更新 wsConnected
+const onBridgeConnected = () => {
+  wsConnected.value = true;
+  // 连接后确保拉取一次状态（桥接模式下父端也可能已经推送，这里作为兜底）
+  setTimeout(() => {
+    sharedConnectionManager.send({ type: 'getHardwareStatus' });
+    sharedConnectionManager.send({ type: 'getDevices' });
+    sharedConnectionManager.send({ type: 'getRunningTasks' });
+  }, 300);
+};
+const onBridgeDisconnected = () => {
+  wsConnected.value = false;
+};
+
+// 初始化共享连接事件流（挂载时调用）
+const initDeviceStream = () => {
+  // 事件绑定
+  sharedConnectionManager.on('message', handleDeviceMessage);
+  sharedConnectionManager.on('connected', onBridgeConnected);
+  sharedConnectionManager.on('disconnected', onBridgeDisconnected);
+
+  // 同步一次当前状态
+  wsConnected.value = sharedConnectionManager.isConnected.value;
+  if (wsConnected.value) {
+    // 已经连上时也兜底拉一次
+    sharedConnectionManager.send({ type: 'getHardwareStatus' });
+    sharedConnectionManager.send({ type: 'getDevices' });
+    sharedConnectionManager.send({ type: 'getRunningTasks' }); 
+  }
+};
 
 // 引入图片文件
 import pump from "@/assets/jpg/pump.jpg";
@@ -492,6 +542,7 @@ import bottle from "@/assets/jpg/bottle.jpg";
 defineOptions({
   name:"MonitorStandalone"
 })
+
 const isAdmin = ref(true);
 const isSidebarOpen = ref(true);
 const isLoading = ref(false); // 添加加载状态
@@ -632,7 +683,7 @@ const loadStructureFromFile = async (path) => {
     console.log("正在从API加载路径ID:", pathId);
     
     try {
-      const response = await axios.get(`${baseUrl}/api/devices/path/${encodeURIComponent(pathId)}`);
+      const response = await axios.get(`${baseUrl}/chem-api/devices/path/${encodeURIComponent(pathId)}`);
       
       if (response.data.code !== 0 || !response.data.data) {
         throw new Error("API返回错误或数据为空");
@@ -1055,7 +1106,7 @@ const saveCurrentPath = async () => {
     }
     
     // 调用API保存到服务器 - 使用新的API路径
-    const response = await axios.post(`${baseUrl}/api/devices/path`, pathConfig);
+    const response = await axios.post(`${baseUrl}/chem-api/devices/path`, pathConfig);
     
     console.log("保存路径响应:", response);
     
@@ -1586,8 +1637,8 @@ const stopDeviceDataRefresh = () => {
 
 
 // WebSocket连接状态
-const wsConnected = ref(false);
-const ws = ref(null);
+// 替换这里：不再在本页面维护本地 ws 实例
+const wsConnected = ref(sharedConnectionManager.isConnected.value);
 
 // 调整图形大小的函数
 const resizeGraph = () => {
@@ -1600,94 +1651,6 @@ const resizeGraph = () => {
   graph.render();
   console.log(`调整图形大小至 ${width}x${height}`);
 };
-
-// 修改WebSocket连接成功后的处理
-const handleWsOpen = () => {
-  console.log('WebSocket连接已建立');
-  wsConnected.value = true;
-  
-  // 发送验证信息
-  if (localStorage.token) {
-    const authMessage = {
-      type: 'authenticate',
-      token: localStorage.token
-    };
-    sendWsMessage(authMessage);
-  }
-  
-  // 连接成功后自动获取硬件状态
-  setTimeout(() => {
-    sendWsMessage({
-      type: 'getHardwareStatus'
-    });
-    
-    // 同时获取所有设备列表
-    sendWsMessage({
-      type: 'getDevices'
-    });
-  }, 500);
-};
-
-// 连接WebSocket服务器
-const connectWebSocket = async () => {
-  try {
-    if (ws.value && ws.value.readyState === WebSocket.OPEN) {
-      console.log('WebSocket已连接');
-      return;
-    }
-    
-    // 关闭之前的连接
-    if (ws.value) {
-      manualClose.value = true;
-      ws.value.close();
-    }
-    
-    manualClose.value = false;
-    
-    console.log("尝试连接WebSocket服务器...");
-    // 确定WebSocket连接地址
-    const baseUrl = process.env.NODE_ENV === 'development'
-      ? 'ws://localhost:3000'
-      : window.location.origin.replace(/^http/, 'ws');
-    const wsUrl = `${baseUrl}/api/devices/realtime`;
-    
-    ws.value = new WebSocket(wsUrl);
-    
-    ws.value.onopen = handleWsOpen;
-    
-    ws.value.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        console.log('收到WebSocket消息:', data);
-        handleWsMessage(data);
-      } catch (error) {
-        console.error('WebSocket消息解析错误:', error);
-      }
-    };
-    
-    ws.value.onclose = (event) => {
-      console.log('WebSocket连接已关闭', event.code, event.reason);
-      wsConnected.value = false;
-
-      // 如果不是用户主动关闭，则尝试重连
-      if (!manualClose.value) {
-        console.log("尝试重新连接...");
-        setTimeout(connectWebSocket, 5000);
-      }
-    };
-
-    ws.value.onerror = (error) => {
-      console.error('WebSocket错误:', error);
-      wsConnected.value = false;
-      errorMessage.value = '无法连接到WebSocket服务器';
-    };
-  } catch (error) {
-    console.error('创建WebSocket实例失败:', error);
-    wsConnected.value = false;
-    errorMessage.value = `创建WebSocket连接失败: ${error.message}`;
-  }
-};
-
 
 // 更新设备状态
 const updateDeviceStatus = (deviceData) => {
@@ -1729,96 +1692,84 @@ const updateDeviceStatus = (deviceData) => {
   }
 };
 
-// 发送WebSocket消息
+// 发送消息（使用共享连接管理器）
 const sendWsMessage = (message) => {
-  if (ws.value && ws.value.readyState === WebSocket.OPEN) {
-    try {
-      const messageStr = JSON.stringify(message);
-      ws.value.send(messageStr);
-      console.log("已发送WebSocket消息:", message);
-      
-      // 如果是设备控制命令，记录到全局设备仓库中以保持UI一致性
-      if (message.type === 'updateDeviceParameters' && message.payload) {
-        const commands = Array.isArray(message.payload) ? message.payload : [message.payload];
-        
-        commands.forEach(command => {
-          if (command.id && globalDevices.value.has(command.id)) {
-            // 根据命令更新全局设备状态
-            const device = globalDevices.value.get(command.id);
-            const updatedDevice = {...device};
-            
-            // 根据命令类型预测设备状态变化
-            switch (command.action) {
-              case 'start':
-                updatedDevice.status = 'running';
-                break;
-              case 'stop':
-                updatedDevice.status = 'idle';
-                break;
-              case 'setPosition':
-                if (command.parameters && command.parameters.position !== undefined) {
-                  updatedDevice.position = command.parameters.position;
-                }
-                break;
-              case 'setTemp':
-                if (command.parameters) {
-                  if (command.parameters.temperature !== undefined) {
-                    updatedDevice.targetTemp = command.parameters.temperature;
-                    updatedDevice.status = 'heating';
-                  }
-                  if (command.parameters.speed !== undefined) {
-                    updatedDevice.heatingSpeed = command.parameters.speed;
-                  }
-                }
-                break;
-              case 'setFlowRate':
-                if (command.parameters && command.parameters.flowRate !== undefined) {
-                  updatedDevice.flowRate = command.parameters.flowRate;
-                }
-                break;
-              case 'setIntensity':
-                if (command.parameters && command.parameters.intensity !== undefined) {
-                  updatedDevice.intensity = command.parameters.intensity;
-                }
-                break;
-              // 可以添加更多命令类型
-            }
-            
-            // 更新参数
-            if (command.parameters) {
-              // 将命令参数合并到设备数据中
-              Object.assign(updatedDevice, command.parameters);
-            }
-            
-            // 更新全局设备仓库
-            globalDevices.value.set(command.id, updatedDevice);
-            
-            // 如果是当前选中的设备，更新控制面板
-            if (selectedDevice.value === command.id) {
-              deviceData.value = JSON.parse(JSON.stringify(updatedDevice));
-            }
-            
-            // 更新设备节点外观
-            updateNodeAppearance(command.id, updatedDevice.status);
-          }
-        });
-      }
-      
-      return true;
-    } catch (error) {
-      console.error("发送WebSocket消息失败:", error);
-      return false;
-    }
-  } else {
-    console.warn("WebSocket未连接，无法发送消息，当前状态:", ws.value ? ws.value.readyState : "无WebSocket实例");
+  const ok = sharedConnectionManager.send(message);
+  if (!ok) {
+    console.warn('共享连接未就绪，消息已进入缓冲或将由管理器重试');
     return false;
   }
+
+  // 如果是设备控制命令，记录到全局设备仓库中以保持UI一致性
+  if (message.type === 'updateDeviceParameters' && message.payload) {
+    const commands = Array.isArray(message.payload) ? message.payload : [message.payload];
+    
+    commands.forEach(command => {
+      if (command.id && globalDevices.value.has(command.id)) {
+        // 根据命令更新全局设备状态
+        const device = globalDevices.value.get(command.id);
+        const updatedDevice = { ...device };
+        
+        // 根据命令类型预测设备状态变化
+        switch (command.action) {
+          case 'start':
+            updatedDevice.status = 'running';
+            break;
+          case 'stop':
+            updatedDevice.status = 'idle';
+            break;
+          case 'setPosition':
+            if (command.parameters && command.parameters.position !== undefined) {
+              updatedDevice.position = command.parameters.position;
+            }
+            break;
+          case 'setTemp':
+            if (command.parameters) {
+              if (command.parameters.temperature !== undefined) {
+                updatedDevice.targetTemp = command.parameters.temperature;
+                updatedDevice.status = 'heating';
+              }
+              if (command.parameters.speed !== undefined) {
+                updatedDevice.heatingSpeed = command.parameters.speed;
+              }
+            }
+            break;
+          case 'setFlowRate':
+            if (command.parameters && command.parameters.flowRate !== undefined) {
+              updatedDevice.flowRate = command.parameters.flowRate;
+            }
+            break;
+          case 'setIntensity':
+            if (command.parameters && command.parameters.intensity !== undefined) {
+              updatedDevice.intensity = command.parameters.intensity;
+            }
+            break;
+          // 可以添加更多命令类型
+        }
+        
+        // 更新参数
+        if (command.parameters) {
+          // 将命令参数合并到设备数据中
+          Object.assign(updatedDevice, command.parameters);
+        }
+        
+        // 更新全局设备仓库
+        globalDevices.value.set(command.id, updatedDevice);
+        
+        // 如果是当前选中的设备，更新控制面板
+        if (selectedDevice.value === command.id) {
+          deviceData.value = JSON.parse(JSON.stringify(updatedDevice));
+        }
+        
+        // 更新设备节点外观
+        updateNodeAppearance(command.id, updatedDevice.status);
+      }
+    });
+  }
+
+  return true;
 };
 
-
-
-// 是否手动关闭WebSocket连接
-const manualClose = ref(false);
 
 // 处理WebSocket消息
 const handleWsMessage = (data) => {
@@ -1869,6 +1820,14 @@ const handleWsMessage = (data) => {
       }
       break;
       
+    case 'taskStatus':
+      // 收到任务状态更新
+      console.log("收到任务状态更新:", data.data);
+      if (data.data) {
+        updateSingleTaskStatus(data.data);
+      }
+      break;
+
     case 'taskStatusUpdate':
       // 收到任务状态更新
       console.log("收到任务状态更新:", data.data);
@@ -1877,14 +1836,20 @@ const handleWsMessage = (data) => {
       }
       break;
       
-    case 'deviceStatusUpdate':
-      // 收到设备状态更新
-      console.log("收到设备状态更新:", data.data);
-      if (data.data && data.data.deviceId) {
-        updateRunningDeviceStatus(data.data);
+      
+    case 'deviceUpdate':
+      console.log("收到设备更新(deviceUpdate):", data.data);
+      if (data.data) {
+        // 优先更新图与面板
+        updateDeviceOnGraph(data.data);
+        // 兼容现有 deviceStatusUpdate 处理逻辑
+        const payload = data.data.deviceId
+          ? data.data
+          : { deviceId: data.data.id, ...data.data };
+        updateRunningDeviceStatus(payload);
       }
       break;
-      
+    
     case 'commandResult':
       // 命令执行结果
       console.log("命令执行结果:", data.data);
@@ -2231,6 +2196,57 @@ const handleWsMessage = (data) => {
       }
       break;
       
+    // 🎯 新增：直接消费后端推送的工作流事件，驱动 G6 实时高亮
+    case 'workflowStarted':
+      console.log('收到工作流开始事件:', data.data);
+      handleWorkflowStartedHighlight({
+        workflowId: data.data?.workflowId,
+        totalSteps: data.data?.totalSteps
+      });
+      break;
+
+    case 'stepStarted':
+      console.log('收到步骤开始事件:', data.data);
+      handleStepStartedHighlight({
+        workflowId: data.data?.workflowId,
+        stepIndex: data.data?.stepIndex,
+        stepName: data.data?.stepName,
+        totalSteps: data.data?.totalSteps
+      });
+      break;
+
+    case 'stepCompleted':
+      console.log('收到步骤完成事件:', data.data);
+      handleStepCompletedHighlight({
+        workflowId: data.data?.workflowId,
+        stepIndex: data.data?.stepIndex,
+        stepName: data.data?.stepName
+      });
+      break;
+
+    case 'stepFailed':
+      console.log('收到步骤失败事件:', data.data);
+      // 用统一的任务状态高亮处理错误（红色）
+      handleTaskStatusHighlight({
+        status: 'error',
+        message: data.data?.error,
+        stepIndex: data.data?.stepIndex,
+        stepName: data.data?.stepName,
+        workflowId: data.data?.workflowId
+      });
+      break;
+
+    case 'workflowCompleted':
+      console.log('收到工作流完成事件:', data.data);
+      // 触发已存在的完成事件监听与清理逻辑
+      window.dispatchEvent(new CustomEvent('workflowCompleted', {
+        detail: {
+          workflowId: data.data?.workflowId,
+          totalTasks: runningTasks.value?.length || 0
+        }
+      }));
+      break;
+      
     default:
       console.warn("未知的WebSocket消息类型:", data.type);
       break;
@@ -2310,7 +2326,7 @@ const loadSavedPaths = async () => {
     // 从后端API获取自定义硬件结构列表
     console.log("从后端API获取硬件结构列表...");
     try {
-      const response = await axios.get(`${baseUrl}/api/devices/path`);
+      const response = await axios.get(`${baseUrl}/chem-api/devices/path`);
       
       if (response.data.code === 0 && response.data.data) {
         // 更新保存的路径列表
@@ -2366,6 +2382,9 @@ const loadFromLocalStorage = () => {
 onMounted(async () => {
   try {
     console.log("组件挂载完成");
+
+    // 初始化共享连接流
+    initDeviceStream();
 
     
     
@@ -2508,12 +2527,7 @@ onMounted(async () => {
       }, 200);
     });
     
-    // 延迟建立WebSocket连接，确保其他组件准备就绪
-    setTimeout(() => {
-      // 建立WebSocket连接
-      connectWebSocket();
-    }, 500);
-    
+
     // 添加键盘快捷键监听
     window.addEventListener('keydown', handleKeyboardShortcuts);
     
@@ -2725,8 +2739,6 @@ onMounted(async () => {
       console.log('📡 已发送monitor-ready消息给父窗口');
     }
     
-    // 连接WebSocket
-    await connectWebSocket();
     
     // 🎯 启动运行任务监控
     startRunningTasksMonitoring();
@@ -2799,7 +2811,27 @@ onMounted(async () => {
           console.log('🔍 未知消息类型:', type, data)
       }
     })
-    
+
+    // 监听父页面消息，处理 IFRAME_READY_CHECK 并回执
+    window.addEventListener('message', (event) => {
+      // 这里只处理“来自容器页”的检查，不做严格 origin 限制，容器页会用 event.origin 过滤来源
+      const msg = event?.data || {};
+      if (msg.type === 'IFRAME_READY_CHECK') {
+        try {
+          window.parent?.postMessage(
+            {
+              type: 'IFRAME_READY_RESPONSE',
+              ready: true,
+              timestamp: new Date().toISOString()
+            },
+            '*' // 父窗口不同端口，使用 *。容器页会基于 event.origin === 'http://localhost:8850' 做过滤
+          );
+          console.log('✅ IFRAME_READY_RESPONSE 已回执');
+        } catch (e) {
+          console.warn('⚠️ IFRAME_READY_RESPONSE 回执失败：', e);
+        }
+      }
+    });
   } catch (error) {
     console.error("组件挂载出错:", error);
     errorMessage.value = `初始化出错: ${error.message}`;
@@ -2814,13 +2846,17 @@ onBeforeUnmount(() => {
   // 🎯 停止运行任务监控
   stopRunningTasksMonitoring();
   
+  // 移除共享连接消息监听
+  sharedConnectionManager.off('message', handleDeviceMessage);
+  sharedConnectionManager.off('connected', onBridgeConnected);
+  sharedConnectionManager.off('disconnected', onBridgeDisconnected);
   // 销毁图表
   graph?.destroy();
 
-  // 关闭WebSocket连接
-  if (ws.value) {
-    ws.value.close();
-  }
+  // 删除：不再直接关闭本地 WebSocket（统一由 sharedConnectionManager/父页面管理）
+  // if (ws.value) {
+  //   ws.value.close();
+  // }
 });
 
 // 监听控制面板的显示状态，控制刷新
@@ -2901,28 +2937,6 @@ const translateStatus = (status) => {
   return statusMap[status] || status;
 };
 
-// 断开WebSocket连接
-const disconnectWebSocket = () => {
-  if (ws.value) {
-    manualClose.value = true; // 标记为手动关闭
-    ws.value.close();
-    ws.value = null;
-  }
-  wsConnected.value = false;
-};
-
-// 尝试重新连接WebSocket
-const reconnectWebSocket = () => {
-  // 如果已有连接，先断开
-  if (ws.value) {
-    disconnectWebSocket();
-  }
-  
-  // 等待一小段时间后重新连接
-  setTimeout(() => {
-    connectWebSocket();
-  }, 500);
-};
 
 // 更新图中的设备节点
 const updateDeviceOnGraph = (device) => {
@@ -4006,6 +4020,50 @@ const updateRunningDeviceStatus = (deviceUpdate) => {
 const currentWorkflowPaths = ref(new Set()) // 当前工作流涉及的设备路径
 const workflowHighlightColor = '#ff6b35' // 工作流高亮颜色
 const isWorkflowRunning = computed(() => runningTasksStore.isWorkflowRunning)
+
+// 新增：任务队列面板状态与展示数据
+const isPanelOpen = ref(true)
+const currentWorkflow = computed(() => runningTasksStore.getCurrentWorkflowInfo || null)
+
+const totalTasks = computed(() => {
+  const cw = currentWorkflow.value
+  if (!cw) return 0
+  if (typeof cw.totalTasks === 'number') return cw.totalTasks
+  if (Array.isArray(cw.tasks)) return cw.tasks.length
+  return 0
+})
+const currentTaskIndex = computed(() => {
+  const cw = currentWorkflow.value
+  if (cw && typeof cw.currentTaskIndex === 'number') return cw.currentTaskIndex
+  return -1
+})
+
+const tasks = computed(() => Array.isArray(currentWorkflow.value?.tasks) ? currentWorkflow.value.tasks : [])
+
+const getTaskName = (t) => {
+  return t?.name || t?.taskName || t?.title || t?.id || '未命名任务'
+}
+
+const currentTaskName = computed(() => {
+  const idx = currentTaskIndex.value
+  if (idx >= 0 && idx < tasks.value.length) return getTaskName(tasks.value[idx])
+  return ''
+})
+
+const upcomingTasks = computed(() => {
+  const idx = currentTaskIndex.value
+  if (!tasks.value?.length || idx >= tasks.value.length - 1) return []
+  return tasks.value.slice(idx + 1).map(getTaskName)
+})
+
+const upcomingTasksPreview = computed(() => upcomingTasks.value.slice(0, 6))
+const upcomingTasksCount = computed(() => upcomingTasks.value.length)
+
+const runningQueueLength = computed(() => {
+  const q = runningTasksStore && runningTasksStore.runningTasks
+  return Array.isArray(q) ? q.length : 0
+})
+
 
 // 🎯 高亮工作流路径
 const highlightWorkflowPaths = () => {
@@ -5533,5 +5591,161 @@ button:disabled {
 .highlighted-path {
   filter: drop-shadow(0 0 8px currentColor);
 }
+.task-queue-panel {
+  position: absolute;
+  right: 16px;
+  top: 88px;
+  width: 300px;
+  max-height: calc(100vh - 120px);
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: saturate(180%) blur(8px);
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.08);
+  overflow: hidden;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: #f8fafc;
+  border-bottom: 1px solid #eef2f7;
+  cursor: pointer;
+}
+
+.panel-header .title {
+  display: flex;
+  align-items: center;
+  font-weight: 600;
+  color: #111827;
+  font-size: 14px;
+}
+
+.panel-header .title .dot {
+  width: 8px;
+  height: 8px;
+  background: #22c55e;
+  border-radius: 50%;
+  margin-right: 8px;
+  box-shadow: 0 0 0 3px rgba(34,197,94,0.15);
+}
+
+.panel-header .toggle-btn {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: #374151;
+}
+
+.panel-body {
+  padding: 10px 12px 12px;
+  overflow: auto;
+}
+
+.section {
+  margin-top: 6px;
+}
+
+.section-title {
+  font-size: 12px;
+  color: #6b7280;
+  margin-bottom: 6px;
+}
+
+.current-task {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #f9fafb;
+  border: 1px solid #eef2f7;
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+
+.current-task .task-name {
+  font-weight: 600;
+  color: #111827;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.current-task .progress {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.divider {
+  height: 1px;
+  background: #f1f5f9;
+  margin: 10px 0;
+}
+
+.task-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.task-list li {
+  display: flex;
+  align-items: center;
+  padding: 6px 8px;
+  border: 1px solid #f1f5f9;
+  border-radius: 8px;
+  margin-bottom: 6px;
+  background: #fff;
+}
+
+.task-list .badge {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: #eef2ff;
+  color: #4f46e5;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 8px;
+  font-size: 12px;
+}
+
+.task-list .name {
+  flex: 1;
+  color: #111827;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.empty {
+  color: #9ca3af;
+  font-size: 12px;
+}
+
+.more {
+  margin-top: 2px;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+/* 动画 */
+.fade-enter-active, .fade-leave-active {
+  transition: opacity .18s ease;
+}
+.fade-enter-from, .fade-leave-to {
+  opacity: 0;
+}
+
 </style>
       

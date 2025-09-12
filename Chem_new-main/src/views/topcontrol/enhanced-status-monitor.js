@@ -190,6 +190,39 @@ export class EnhancedStatusMonitor {
     this.updateStateSyncData(topControlStatus);
   }
   
+  collectPerformanceData() {
+    try {
+      const topControlStatus = topControlWebSocketManager.getEnhancedStatus();
+      this.updatePerformanceData(topControlStatus);
+    } catch (e) {
+      console.warn('collectPerformanceData 执行异常:', e);
+    }
+  }
+  
+  updateConnectionQuality() {
+    try {
+      const enhancedStatus = enhancedWebSocketManager.getSystemStatus();
+      this.updateConnectionQualityData(enhancedStatus);
+    } catch (e) {
+      console.warn('updateConnectionQuality 执行异常:', e);
+    }
+  }
+
+  checkStateSync() {
+    try {
+      const topControlStatus = topControlWebSocketManager.getEnhancedStatus();
+      const issues = this.detectConsistencyIssues(
+        topControlStatus.sync,
+        topControlStatus.operations
+      );
+
+      // 仅更新一致性检查时间与问题列表，避免大对象替换引起不必要的响应式抖动
+      this.monitoringData.stateSync.consistency.lastCheck = Date.now();
+      this.monitoringData.stateSync.consistency.issues = issues;
+    } catch (e) {
+      console.warn('checkStateSync 执行异常:', e);
+    }
+  }
   /**
    * 更新连接质量数据
    */

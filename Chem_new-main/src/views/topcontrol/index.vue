@@ -1372,10 +1372,15 @@ const workflowExecutor = reactive({
       // 添加临时消息监听
       topControlWsManager.addMessageHandler('commandResult', responseHandler);
       
-      // 发送WebSocket消息
+      // 发送WebSocket消息（使用 deviceControl 单命令协议）
       const success = sendWsMessage({
-        type: 'updateDeviceParameters',
-        payload: [wsCommand]
+        type: 'deviceControl',
+        payload: {
+          deviceId: cmd.deviceId,
+          deviceType: cmd.deviceType,
+          action: cmd.action,
+          parameters: cmd.parameters || {}
+        }
       });
       
       if (!success) {
@@ -2210,7 +2215,7 @@ const loadStructureFromFile = async (path) => {
     console.log("正在从API加载路径ID:", pathId);
     
     try {
-      const response = await axios.get(`${baseUrl}/api/devices/path/${encodeURIComponent(pathId)}`);
+      const response = await axios.get(`${baseUrl}/chem-api/devices/path/${encodeURIComponent(pathId)}`);
       
       if (response.data.code !== 0 || !response.data.data) {
         throw new Error("API返回错误或数据为空");
@@ -2865,6 +2870,11 @@ const hardwareIP = topControlWsManager.hardwareIP;
 const hardwareErrorMessage = topControlWsManager.hardwareErrorMessage;
 const isHardwareConnecting = topControlWsManager.isHardwareConnecting;
 
+// 新增：任务与工作流相关的响应式状态
+const taskStatuses = topControlWsManager.taskStatuses;
+const runningTasks = topControlWsManager.runningTasks;
+const workflowEvents = topControlWsManager.workflowEvents;
+
 // 调整图形大小的函数
 const resizeGraph = () => {
   if (!graph || !container.value) return;
@@ -2882,6 +2892,8 @@ const connectWebSocket = async () => {
   try {
     await topControlWsManager.connect();
     console.log('TopControl WebSocket连接成功');
+    // 新增：连接成功后拉取运行中任务，保证初次状态同步
+    await topControlWsManager.sendMessage({ type: 'getRunningTasks' });
   } catch (error) {
     console.error('TopControl WebSocket连接失败:', error);
     errorMessage.value = `连接失败: ${error.message}`;
@@ -3217,7 +3229,7 @@ const loadSavedPaths = async () => {
     // 从后端API获取自定义硬件结构列表
     console.log("从后端API获取硬件结构列表...");
     try {
-      const response = await axios.get(`${baseUrl}/api/devices/path`);
+      const response = await axios.get(`${baseUrl}/chem-api/devices/path`);
       
       if (response.data.code === 0 && response.data.data) {
         // 更新保存的路径列表
@@ -4694,26 +4706,31 @@ const sendAllParameterChanges = async () => {
       
       // 根据设备类型构建不同的命令
       switch (deviceType) {
-        case 'pump':
+        case 'pump': {
+          const port =
+            changes.params.aspiratePort ?? changes.params.dispensePort ?? undefined;
           updateCommands.push({
             id: deviceId,
             type: 'pump',
             action: 'updateParameters',
             parameters: {
               ...(changes.params.setSpeed !== undefined && { speed: changes.params.setSpeed }),
-              ...(changes.params.aspiratePort !== undefined && { aspiratePort: changes.params.aspiratePort }),
-              ...(changes.params.dispensePort !== undefined && { dispensePort: changes.params.dispensePort }),
-              ...(changes.params.position !== undefined && { position: changes.params.position })
+              ...(changes.params.position !== undefined && { position: changes.params.position }),
+              ...(port !== undefined && { port })
             }
           });
           break;
+        }
           
         case 'valve':
           updateCommands.push({
-            deviceId: deviceId,
-            deviceType: 'valve',
+            id: deviceId,
+            type: 'valve',
             action: 'setPosition',
-            parameters: { position: changes.params.position }
+            parameters: {
+              position: changes.params.position,
+              port: changes.params.position
+            }
           });
           break;
           

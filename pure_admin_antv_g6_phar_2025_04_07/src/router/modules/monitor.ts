@@ -13,7 +13,7 @@ export default {
       name: "Monitor",
       component: () => import("@/views/monitor/index.vue"),
       meta: {
-        title: "实时监控", // 页面标题
+        title: "Monitor", // 页面标题
         keepAlive: true, // ✅ 启用页面缓存
         showLink: true
       }

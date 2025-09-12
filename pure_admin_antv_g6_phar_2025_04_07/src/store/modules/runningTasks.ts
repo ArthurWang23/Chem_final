@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import axios from "axios";
-
+import { http } from "@/utils/http";
 // 🎯 添加类型定义
 interface DeviceState {
   status?: string;
@@ -79,6 +79,8 @@ export const useRunningTasksStore = defineStore("runningTasks", {
       );
       
       if (taskIndex >= 0) {
+        const prevStatus = this.runningTasks[taskIndex].status; // 记录前一状态
+        
         this.runningTasks[taskIndex] = {
           ...this.runningTasks[taskIndex],
           status,
@@ -95,6 +97,31 @@ export const useRunningTasksStore = defineStore("runningTasks", {
         
         this.lastUpdate = new Date();
         this.syncWithServer();
+
+        // 上报 /chem-api/tasks/status
+        http
+          .request("post", "/chem-api/tasks/status", {
+            data: { taskId, taskKey, status, progress, currentDevice }
+          })
+          .catch(err => console.error("更新任务状态上报失败", err));
+
+        // 若首次进入终态（2=完成，3=失败），上报 /chem-api/tasks/end
+        if (
+          (status === 2 || status === 3) &&
+          prevStatus !== 2 &&
+          prevStatus !== 3
+        ) {
+          http
+            .request("post", "/chem-api/tasks/end", {
+              data: {
+                taskId,
+                taskKey,
+                status,
+                message: status === 2 ? "completed" : "failed"
+              }
+            })
+            .catch(err => console.error("结束任务上报失败", err));
+        }
       }
     },
     
@@ -150,6 +177,20 @@ export const useRunningTasksStore = defineStore("runningTasks", {
           status: 1,
           progress: 0
         });
+      });
+
+      // 启动工作流时为每个任务上报 /chem-api/tasks/start
+      executionPlan.forEach(task => {
+        http
+          .request("post", "/chem-api/tasks/start", {
+            data: {
+              taskId: task.taskId,
+              taskKey: task.taskKey,
+              taskName: task.taskName,
+              product: task.product
+            }
+          })
+          .catch(err => console.error("启动任务上报失败", err));
       });
       
       this.startStateChecking();
@@ -315,7 +356,7 @@ export const useRunningTasksStore = defineStore("runningTasks", {
 
     async fetchRunningTasks() {
       try {
-        const response = await axios.get('/api/tasks/running');
+        const response = await axios.get('/chem-api/tasks/running');
         if (response.data && response.data.code === 0) {
           this.runningTasks = response.data.data;
           this.lastUpdate = new Date();
@@ -327,8 +368,11 @@ export const useRunningTasksStore = defineStore("runningTasks", {
     
     async syncWithServer() {
       try {
-        await axios.post('/api/tasks/sync', {
-          runningTasks: this.runningTasks
+        await http.request("post", "/chem-api/tasks/sync", {
+          data: {
+            // 仅发送必要数据，避免 Map / 复杂对象进入请求体
+            runningTasks: this.runningTasks
+          }
         });
       } catch (error) {
         console.error('同步任务状态失败', error);

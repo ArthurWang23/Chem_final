@@ -131,7 +131,7 @@ export class StateSyncOptimizer {
     strategies.set('server', {
       name: '服务器优先',
       resolve: (localState, serverState) => {
-        console.log('🔄 使用服务器优先策略解决冲突');
+       // console.log('🔄 使用服务器优先策略解决冲突');
         return {
           resolved: serverState,
           reason: 'server_priority',
@@ -144,7 +144,7 @@ export class StateSyncOptimizer {
     strategies.set('client', {
       name: '客户端优先',
       resolve: (localState, serverState) => {
-        console.log('🔄 使用客户端优先策略解决冲突');
+        // console.log('🔄 使用客户端优先策略解决冲突');
         return {
           resolved: localState,
           reason: 'client_priority',
@@ -157,7 +157,7 @@ export class StateSyncOptimizer {
     strategies.set('merge', {
       name: '智能合并',
       resolve: (localState, serverState) => {
-        console.log('🔄 使用智能合并策略解决冲突');
+        //console.log('🔄 使用智能合并策略解决冲突');
         return {
           resolved: this.mergeStates(localState, serverState),
           reason: 'intelligent_merge',
@@ -344,7 +344,7 @@ export class StateSyncOptimizer {
    * 处理冲突
    */
   handleConflict(deviceId, localState, serverState) {
-    console.warn(`⚠️ 检测到状态冲突: ${deviceId}`);
+    // console.warn(`⚠️ 检测到状态冲突: ${deviceId}`);
     
     const conflict = {
       deviceId,
@@ -363,7 +363,59 @@ export class StateSyncOptimizer {
     // 尝试解决冲突
     this.resolveConflict(conflict);
   }
-  
+  handleParameterUpdateResults(data) {
+    try {
+      if (!data || !data.data) return;
+      const { results = [], successCount = 0, failedCount = 0 } = data.data;
+
+      console.log(`🔧 [StateSync] 参数更新结果: ✅${successCount} / ❌${failedCount}`);
+
+      const now = Date.now();
+
+      results.forEach((r) => {
+        const deviceId = r.id || r.deviceId;
+        if (!deviceId) return;
+
+        if (r.success) {
+          // 合并参数到缓存
+          const existing = this.stateCache.devices.get(deviceId) || { id: deviceId };
+          // 后端可能回传本次应用的 parameters 或者新状态，这里尽量合并
+          const merged = {
+            ...existing,
+            ...(r.parameters || {}),
+            ...(r.state || {}),
+            lastUpdate: now,
+            timestamp: now,
+            version: (existing.version || 0) + 1
+          };
+          merged.checksum = this.calculateChecksum(merged);
+          this.stateCache.devices.set(deviceId, merged);
+
+          // 元数据更新
+          this.updateMetadata(deviceId, {
+            lastUpdate: now,
+            updateCount: (existing.updateCount || 0) + 1,
+            size: JSON.stringify(merged).length
+          });
+        } else {
+          // 失败纳入统计和冲突/待处理池，便于后续补偿或回滚
+          this.syncStatus.errorCount++;
+          this.conflictResolver.conflicts.push({
+            deviceId,
+            timestamp: now,
+            type: 'parameter_update_failed',
+            error: r.error || 'unknown_error',
+            resolved: false
+          });
+        }
+      });
+
+      // 刷新缓存命中率等指标（可选）
+      this.updateCacheHitRate();
+    } catch (e) {
+      console.error('❌ [StateSync] 处理参数更新结果失败:', e);
+    }
+  }
   /**
    * 解决冲突
    */

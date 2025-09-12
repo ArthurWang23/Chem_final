@@ -2004,7 +2004,7 @@ Store状态：
           redirect: 'follow'
         };
 
-        const response = await fetch(`/api/tasks/${row.id}/parameters?taskKey=${row.key}`, requestOptions);
+        const response = await fetch(`/chem-api/tasks/${row.id}/parameters?taskKey=${row.key}`, requestOptions);
         
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -6834,6 +6834,30 @@ Store状态：
               this.requestMonitorGraphNodes();
             }, 1000);
           }
+
+          // 🆕 新增：把 IFRAME_READY_RESPONSE 也作为就绪信号处理
+          if (event.data.type === 'IFRAME_READY_RESPONSE' && event.data.ready) {
+            console.log('✅ 收到iframe准备就绪确认（容器页转发）');
+            this.monitorReadyReceived = true;
+
+            // 主动请求图形节点，和 monitor-ready 分支保持一致
+            setTimeout(() => {
+              this.requestMonitorGraphNodes();
+            }, 1000);
+
+            // 如果有缓存的高亮数据，按原逻辑依次发送
+            if (this.highlightDataCache && this.highlightDataCache.length > 0) {
+              console.log(`📤 发送${this.highlightDataCache.length}个缓存的高亮数据（IFRAME_READY_RESPONSE）`);
+              this.highlightDataCache.forEach((highlightData, index) => {
+                setTimeout(() => {
+                  this.sendRealTimeHighlightToMonitor(highlightData);
+                  console.log(`✅ 已发送缓存高亮数据 ${index + 1}/${this.highlightDataCache.length}`);
+                }, index * 500);
+              });
+              this.highlightDataCache = [];
+            }
+            return;
+          }
           
           // 🔍 处理监控界面返回的图形节点信息
           if (event.data.type === 'GRAPH_NODES_RESPONSE') {
@@ -6945,7 +6969,7 @@ Store状态：
                       redirect: 'follow'
                     };
 
-                    const deleteResponse = await fetch(`/api/tasks/${taskId}/parameters?taskKey=${taskKey}`, deleteRequestOptions);
+                    const deleteResponse = await fetch(`/chem-api/tasks/${taskId}/parameters?taskKey=${taskKey}`, deleteRequestOptions);
                     const deleteResult = await deleteResponse.json();
                     console.log('🗑️ 删除旧参数结果:', deleteResult);
                     
@@ -6976,7 +7000,8 @@ Store状态：
                     redirect: 'follow'
                   };
 
-                  const paramResponse = await fetch(`/api/tasks/${taskId}/parameters`, paramRequestOptions);
+                  
+                  const paramResponse = await fetch(`/chem-api/tasks/${taskId}/parameters`, paramRequestOptions);
                   const paramResult = await paramResponse.json();
                   console.log('💾 保存参数结果:', paramResult);
                   

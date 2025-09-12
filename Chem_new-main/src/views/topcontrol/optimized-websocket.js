@@ -19,8 +19,10 @@ export class TopControlWebSocketManager {
     // 设备数据存储
     this.globalDevices = ref(new Map());
     this.deviceUpdateCallbacks = new Set();
-    
-    // 消息处理器
+    // 新增：任务/工作流响应式状态
+    this.taskStatuses = ref(new Map());
+    this.runningTasks = ref([]);
+    this.workflowEvents = ref([]);
     this.messageHandlers = new Map();
     
     // 🚀 第二阶段增强功能
@@ -257,6 +259,35 @@ export class TopControlWebSocketManager {
         case 'deviceStatus':
           this.handleDeviceStatusMessage(data);
           break;
+        
+        // 新增：设备更新（与后端对齐）
+        case 'deviceUpdate':
+          if (data.data) {
+            this.updateDeviceStatus(data.data);
+            this.updateDeviceInStorage(data.data);
+            this.triggerDeviceUpdateCallbacks();
+          }
+          break;
+
+        // 新增：任务状态（与后端对齐）
+        case 'taskStatus':
+          this.handleTaskStatusMessage(data);
+          break;
+        
+        // 新增：运行中任务列表（与后端对齐）
+        case 'runningTasks':
+          this.handleRunningTasksMessage(data);
+          break;
+
+        // 新增：工作流事件（与后端对齐）
+        case 'workflowStarted':
+        case 'workflowCompleted':
+        case 'workflowError':
+        case 'stepStarted':
+        case 'stepCompleted':
+        case 'stepFailed':
+          this.handleWorkflowEventMessage(data);
+          break;
           
         case 'error':
           this.handleErrorMessage(data);
@@ -283,6 +314,43 @@ export class TopControlWebSocketManager {
     }
   }
   
+  // 新增：任务状态处理（占位，先记录并透传）
+  handleTaskStatusMessage(data) {
+    // 之前仅 console.log；现在落库为响应式 Map，key 为 taskId
+    const t = data && data.data;
+    if (t && t.taskId) {
+      const next = new Map(this.taskStatuses.value);
+      next.set(t.taskId, t);
+      this.taskStatuses.value = next;
+    }
+    console.log('📌 TopControl任务状态更新(taskStatus):', data.data);
+    // 可在此对接任务状态的本地存储或 UI 绑定
+  }
+
+  // 新增：运行中任务处理（占位，先记录并透传）
+  handleRunningTasksMessage(data) {
+    // 之前仅 console.log；现在将数组直接落到响应式 runningTasks
+    const tasks = data && data.data;
+    if (Array.isArray(tasks)) {
+      this.runningTasks.value = tasks;
+    } else {
+      this.runningTasks.value = [];
+    }
+    if (Array.isArray(data.data)) {
+      console.log(`📌 TopControl运行中任务(${data.data.length})`, data.data);
+      // 可在此缓存运行任务列表或通知对应面板
+    } else {
+      console.log('📌 TopControl运行中任务(空或无效)', data.data);
+    }
+  }
+
+  // 新增：工作流事件处理（占位，先记录并透传）
+  handleWorkflowEventMessage(data) {
+    // 之前仅 console.log；现在记录为事件流，UI 可做时间线/进度条
+    const evt = { type: data.type, ...(data.data || {}), ts: Date.now() };
+    this.workflowEvents.value = [...this.workflowEvents.value, evt];
+    // 可在此对接 UI 提示/进度显示（步骤开始/完成/失败等）
+  }
   /**
    * 处理设备列表消息
    */
@@ -938,4 +1006,4 @@ export class TopControlWebSocketManager {
 // 创建TopControl专用的WebSocket管理器实例
 export const topControlWebSocketManager = new TopControlWebSocketManager();
 
-export default topControlWebSocketManager; 
+export default topControlWebSocketManager;

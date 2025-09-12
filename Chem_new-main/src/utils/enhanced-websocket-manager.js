@@ -132,24 +132,18 @@ class EnhancedWebSocketManager {
     const pingTime = Date.now();
     const heartbeatId = `heartbeat_${pingTime}`;
     
-    // 记录心跳操作
-    this.operationTracker.set(heartbeatId, {
-      type: 'heartbeat',
-      startTime: pingTime,
-      timeout: this.timeoutConfig.operationTimeout
-    });
-    
-    // 发送心跳
-    sharedConnectionManager.send({
-      type: 'heartbeat',
-      timestamp: pingTime,
-      id: heartbeatId
-    });
-    
-    // 设置心跳超时检测
-    setTimeout(() => {
-      this.checkOperationTimeout(heartbeatId);
-    }, this.timeoutConfig.operationTimeout);
+    // 使用增强发送（自动附带 operationId 与超时检测），避免重复手动追踪和定时器
+    this.sendEnhanced(
+      {
+        type: 'heartbeat',
+        timestamp: pingTime
+      },
+      {
+        type: 'heartbeat',
+        operationId: heartbeatId,
+        timeout: this.timeoutConfig.operationTimeout
+      }
+    );
   }
   
   /**
@@ -635,4 +629,4 @@ class EnhancedWebSocketManager {
 
 // 创建增强管理器实例
 export const enhancedWebSocketManager = new EnhancedWebSocketManager();
-export default enhancedWebSocketManager; 
+export default enhancedWebSocketManager;

@@ -53,8 +53,8 @@ class SharedConnectionManager {
     const baseUrl = process.env.NODE_ENV === 'development'
       ? 'ws://localhost:3000'
       : window.location.origin.replace(/^http/, 'ws');
-    this.wsUrl = `${baseUrl}/api/devices/realtime`;
-    
+    this.wsUrl = `${baseUrl}/chem-api/devices/realtime`;
+    console.log(`[WS][sharedConnectionManager] init wsUrl=${this.wsUrl}`);
     // 自动连接
     this.connect();
   }
@@ -69,7 +69,7 @@ class SharedConnectionManager {
     }
     
     console.log(`🔌 尝试连接WebSocket (${this.reconnectConfig.retryCount}/${this.reconnectConfig.maxRetries})`);
-    
+    console.log(`[WS][sharedConnectionManager] connecting to ${this.wsUrl}`);
     try {
       this.ws = new WebSocket(this.wsUrl);
       
@@ -174,20 +174,26 @@ class SharedConnectionManager {
    */
   send(message) {
     const messageObj = typeof message === 'string' ? { data: message } : message;
+    console.log("***************************************************************666")
     
+    const readyState = this.ws ? this.ws.readyState : 'NO_WS';
+    console.log(`[WS][sharedConnectionManager] send attempt: url=${this.wsUrl}, connected=${this.isConnected.value}, readyState=${readyState}, type=${messageObj.type || 'data'}`);
     if (this.isConnected.value && this.ws && this.ws.readyState === WebSocket.OPEN) {
       try {
         this.ws.send(JSON.stringify(messageObj));
         console.log('📤 消息已发送:', messageObj.type || 'data');
+        console.log(`[WS][sharedConnectionManager] send result: success=true, type=${messageObj.type || 'data'}, queueSize=${this.messageQueue.length}`);
         return true;
       } catch (error) {
         console.error('❌ 发送消息失败:', error);
         this.cacheMessage(messageObj);
+        console.warn(`[WS][sharedConnectionManager] send result: success=false (exception), cached=true, type=${messageObj.type || 'data'}, reason=${error?.message || error}`);
         return false;
       }
     } else {
       console.warn('⚠️ WebSocket未连接，消息已缓存');
       this.cacheMessage(messageObj);
+      console.warn(`[WS][sharedConnectionManager] send result: success=false (cached), reason=not_connected, url=${this.wsUrl}, connected=${this.isConnected.value}, readyState=${readyState}, type=${messageObj.type || 'data'}, queueSize=${this.messageQueue.length}`);
       return false;
     }
   }
@@ -210,7 +216,7 @@ class SharedConnectionManager {
   }
   
   /**
-   * 📤 处理缓存的消息
+   * � 处理缓存的消息
    */
   processCachedMessages() {
     if (this.messageQueue.length === 0) {
@@ -236,7 +242,7 @@ class SharedConnectionManager {
   }
   
   /**
-   * 📨 处理接收到的消息
+   * � 处理接收到的消息
    */
   handleMessage(data) {
     // 处理硬件状态更新
@@ -250,7 +256,7 @@ class SharedConnectionManager {
   }
   
   /**
-   * 📊 分析连接质量
+   * � 分析连接质量
    */
   analyzeConnectionQuality() {
     const now = Date.now();

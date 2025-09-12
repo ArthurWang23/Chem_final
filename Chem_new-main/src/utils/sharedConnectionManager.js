@@ -1,7 +1,4 @@
-/**
- * 🔧 共享WebSocket连接管理器
- * 为多个界面提供统一的硬件通信接口，避免连接冲突
- */
+// 文件：sharedConnectionManager.js（类 SharedConnectionManager 内新增桥接支持）
 import { ref, reactive } from 'vue';
 
 class SharedConnectionManager {
@@ -42,6 +39,8 @@ class SharedConnectionManager {
       totalDisconnects: 0
     });
     
+    this.transport = 'ws';
+    this.bridgeClient = null;
     this.init();
   }
   
@@ -49,20 +48,30 @@ class SharedConnectionManager {
    * 初始化连接管理器
    */
   init() {
-    // 确定WebSocket连接地址
-    const baseUrl = process.env.NODE_ENV === 'development'
-      ? 'ws://localhost:3000'
-      : window.location.origin.replace(/^http/, 'ws');
-    this.wsUrl = `${baseUrl}/api/devices/realtime`;
-    
-    // 自动连接
-    this.connect();
+    // 优先尝试 iframe 桥接
+    this.tryInitBridge().then((ok) => {
+      if (ok) {
+        // 桥接成功，不再直连 WS
+        return;
+      }
+      // 确定WebSocket连接地址
+      const baseUrl = process.env.NODE_ENV === 'development'
+        ? 'ws://localhost:3000'
+        : window.location.origin.replace(/^http/, 'ws');
+      this.wsUrl = `${baseUrl}/chem-api/devices/realtime`;
+      // 自动连接
+      this.connect();
+    });
   }
   
   /**
    * 🔌 建立WebSocket连接
    */
   connect() {
+    if (this.transport === 'bridge') {
+      // 桥接模式下由父页面统一维护连接，这里不创建 WebSocket
+      return;
+    }
     if (this.isReconnecting.value) {
       console.log('⚠️ 已在重连中，跳过重复连接');
       return;
@@ -88,14 +97,6 @@ class SharedConnectionManager {
         
         // 触发连接成功事件
         this.emit('connected', event);
-        
-        // 发送认证信息
-        if (localStorage.token) {
-          this.send({
-            type: 'authenticate',
-            token: localStorage.token
-          });
-        }
         
         // 请求硬件状态
         setTimeout(() => {
@@ -174,6 +175,17 @@ class SharedConnectionManager {
    */
   send(message) {
     const messageObj = typeof message === 'string' ? { data: message } : message;
+
+    if (this.transport === 'bridge' && this.bridgeClient?.ready) {
+      try {
+        this.bridgeClient.send(messageObj);
+        return true;
+      } catch (e) {
+        console.error('❌ Bridge 发送失败，回退缓存:', e);
+        this.cacheMessage(messageObj);
+        return false;
+      }
+    }
     
     if (this.isConnected.value && this.ws && this.ws.readyState === WebSocket.OPEN) {
       try {
@@ -246,6 +258,7 @@ class SharedConnectionManager {
       case 'devices':
       case 'parameterUpdateResults':
       case 'commandResult':
+      case 'deviceUpdate':
         // 这些消息由具体界面处理
         break;
       default:
@@ -325,6 +338,13 @@ class SharedConnectionManager {
    * 🔌 断开连接
    */
   disconnect() {
+    if (this.transport === 'bridge') {
+      try {
+        this.bridgeClient?.teardown();
+      } catch {}
+      this.isConnected.value = false;
+      return;
+    }
     if (this.ws) {
       this.ws.close();
       this.ws = null;
@@ -373,9 +393,108 @@ class SharedConnectionManager {
       payload: commands
     });
   }
+
+  /**
+   * 尝试初始化 iframe 桥接（父应用统一连接）
+   * 成功时：this.transport='bridge'，并触发 connected 事件
+   */
+  async tryInitBridge() {
+    try {
+      if (typeof window === 'undefined') return false;
+      if (window.parent === window) return false; // 非 iframe 环境
+
+      const BRIDGE_TIMEOUT = 2000;
+      const child = {
+        id: null,
+        ready: false
+      };
+
+      const onMessage = (event) => {
+        const data = event.data;
+        if (!data || typeof data !== 'object') return;
+
+        if (data.kind === 'BRIDGE_ACK') {
+          child.id = data.childId;
+          child.ready = true;
+
+          // 标记“已连接”
+          this.transport = 'bridge';
+          this.bridgeClient = createBridgeClient(child.id, this);
+          this.isConnected.value = true;
+          this.connectionQuality.value = 'good';
+          this.emit('connected', { via: 'bridge' });
+
+          // 默认订阅常用类型，减少无关推送
+          this.bridgeClient.subscribe(['hardwareStatus', 'devices', 'parameterUpdateResults', 'commandResult']);
+
+          // 初始化拉取状态
+          setTimeout(() => {
+            this.send({ type: 'getHardwareStatus' });
+            this.send({ type: 'getDevices' });
+          }, 200);
+        }
+
+        if (data.kind === 'WS_EVENT') {
+          // 父桥推送事件 → 复用原有处理逻辑
+          const wrapped = { type: data.type, data: data.data, correlationId: data.correlationId };
+          this.handleMessage(wrapped);
+          this.emit('message', wrapped);
+        }
+      };
+
+      window.addEventListener('message', onMessage, false);
+      // 发送握手
+      window.parent.postMessage({ kind: 'BRIDGE_HELLO', app: 'Chem_new-main' }, '*');
+
+      // 等待 ACK
+      const ok = await new Promise((resolve) => {
+        const t = setTimeout(() => resolve(false), BRIDGE_TIMEOUT);
+        const check = () => {
+          if (child.ready) {
+            clearTimeout(t);
+            resolve(true);
+          } else {
+            // 轮询检查
+            setTimeout(check, 50);
+          }
+        };
+        check();
+      });
+
+      if (!ok) {
+        window.removeEventListener('message', onMessage, false);
+      }
+      return ok;
+    } catch (e) {
+      console.warn('桥接初始化失败，回退到直连 WS:', e);
+      return false;
+    }
+  }
+}
+
+
+// Bridge 客户端实现：通过 postMessage 与父桥通信
+function createBridgeClient(childId, owner) {
+  const api = {
+    ready: true,
+    send(msg) {
+      const { type, payload, correlationId } = msg || {};
+      window.parent.postMessage({ kind: 'WS_SEND', type, payload, correlationId, childId }, '*');
+    },
+    subscribe(types) {
+      window.parent.postMessage({ kind: 'WS_SUBSCRIBE', types, childId }, '*');
+    },
+    unsubscribe(types) {
+      window.parent.postMessage({ kind: 'WS_UNSUBSCRIBE', types, childId }, '*');
+    },
+    teardown() {
+      window.parent.postMessage({ kind: 'WS_UNSUBSCRIBE_ALL', childId }, '*');
+    }
+  };
+  return api;
 }
 
 // 创建单例实例
 const sharedConnectionManager = new SharedConnectionManager();
 
-export default sharedConnectionManager; 
+export default sharedConnectionManager;
