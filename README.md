@@ -4,196 +4,179 @@
 
 本软件采用前后端分离的架构，硬件通信部分分为以下几个主要组件：
 
-### 前端部分
+# 运行与操作说明
 
-1. **硬件通信模块** (`src/utils/hardwareCommunication.ts`)
-   - 负责前端与硬件的直接WebSocket通信
-   - 提供命令帧格式化和状态帧解析功能
-   - 主要用于开发和测试环境
+本章汇总项目结构与运行方式，覆盖本地开发、Docker 一键部署与生产构建，同时说明关键端口、环境变量、前后端与 WebSocket 的交互入口以及常见排查建议。
 
-2. **硬件API服务** (`src/utils/api/hardware.ts`)
-   - 提供调用后端硬件API的接口
-   - 封装HTTP请求，简化前端组件对后端的调用
+## 架构概览
 
-3. **设备控制组件** (`src/views/topcontrol/index.vue`)
-   - 提供用户图形界面进行设备控制
-   - 使用硬件API服务和WebSocket与后端通信
+- 前端父应用：`pure_admin_antv_g6_phar_2025_04_07`（Vue3 + Vite）
+  - 提供主界面（任务管理、监控容器、流程操作）
+  - 通过代理统一访问后端与子应用
+- 前端子应用：`Chem_new-main`（Vue3 + Vite）
+  - 提供监控与结构控制界面
+  - 生产环境下以 `/child` 路由挂载到同一站点
+- AI WebSocket聚合：`chemistry-back`（Node WebSocket 服务器，端口 `3004`）
+  - 接收前端的 WS 文本消息，依据 `serve` 字段转发到远端 AI/调度服务（single/multi/graph/queue）
+- 业务后端：`pure-admin-backend`（REST + WS，端口 `3000`，路径 `/chem-api`）
+  - 当前仓库目录为空，需使用你们的后端实现或镜像
+- 统一反代：Nginx（前后端统一站点，代理 `/chem-api`、`/api`、`/ws-ai`）
 
-### 后端部分
+## 关键端口与路径
 
-1. **硬件服务** (`services/hardwareService.ts`)
-   - 负责与硬件的WebSocket通信
-   - 实现命令帧构造和发送
-   - 处理状态帧接收和解析
+- 父应用开发端口：`8848`（`VITE_PORT` 可调）
+- 子应用开发端口：`8850`
+- 业务后端端口：`3000`（REST + WS，`/chem-api`）
+- AI WebSocket聚合端口：`3004`（由 Nginx 反代为 `/ws-ai`）
+- 统一站点（Docker）：`http://localhost`（父应用根 `/`，子应用前缀 `/child`）
 
-2. **硬件控制器** (`controllers/hardwareController.ts`)
-   - 提供REST API接口
-   - 处理前端的硬件命令请求
+## 环境要求
 
-3. **硬件路由** (`router/hardwareRoutes.ts`)
-   - 定义API路径
-   - 连接控制器和HTTP请求
+- Node.js `>= 18.18`（推荐 Node 20）
+- pnpm `>= 9`（建议 `corepack enable`）
+- Docker 与 Docker Compose（用于一键部署）
+- Windows 开发环境（PowerShell/CMD）
 
-## 通信协议
+## 本地开发（分进程运行）
 
-### 基本结构
-
-通信协议采用二进制帧格式，主要包括：
-
-1. **上位机发送命令帧**：
-   - 校验数据 (6字节)
-   - 包头 (8字节)
-   - 10个子控制器时隙包头 (每个8字节)
-   - 10个子控制器设备控制数据 (每个16*8字节)
-
-2. **下位机返回状态帧**：
-   - 22字节包头 (包含子控制器ID)
-   - 设备状态数据 (Data1-Data10，每部分8字节)
-
-### 设备数据格式
-
-每种设备在命令帧中的位置是固定的：
-
-- **泵**：占用Data1-Data4，每个泵6个参数（速度、位置、类型、ID、初始化状态、停止状态、端口）
-- **阀门**：占用Data5-Data6前半部分，每个阀门2个参数（类型+ID、孔位）
-- **MFC**：占用Data6中部，参数包括类型、ID、流量
-- **光照**：占用Data6末尾到Data7开头，参数包括类型、ID、光强
-- **加热**：占用Data7-Data10，每个加热器4个参数（类型、ID、速度、温度）
-
-## 改进
-
-1. **职责明确**：
-   - 前端硬件通信模块只负责直接的WebSocket通信
-   - 后端硬件服务负责与硬件的完整交互和状态管理
-
-2. **代码优化**：
-   - 去除重复代码
-   - 前后端通信逻辑分离
-   - 类型和接口定义标准化
-
-3. **错误处理**：
-   - 增强了错误捕获和日志记录
-   - 添加了超时处理
-   - 多级回退机制确保系统稳定性
-
-## 使用说明
-
-### 发送设备命令
-
-```typescript
-// 前端组件中
-import hardwareApi from "@/utils/api/hardware";
-
-// 构造命令
-const command = {
-  id: "module-1-pump-2", // 模块1的泵2
-  type: DeviceType.PUMP,
-  action: "start",
-  parameters: {
-    speed: 1000,
-    position: 5000
-  }
-};
-
-// 调用API发送命令
-const result = await hardwareApi.sendHardwareCommand(command);
+- 启用 Corepack（一次性）
+```bash
+corepack enable
 ```
 
-### 直接WebSocket通信 (测试用)
+- 父应用（主界面）
+```bash
+pnpm install --dir d:\Chem_final\pure_admin_antv_g6_phar_2025_04_07
+```
+```bash
+pnpm --dir d:\Chem_final\pure_admin_antv_g6_phar_2025_04_07 dev
+```
+访问：`http://localhost:8848`
 
-```typescript
-import hardwareCommunication from "@/utils/hardwareCommunication";
+- 子应用（监控与结构控制）
+```bash
+pnpm install --dir d:\Chem_final\Chem_new-main
+```
+```bash
+pnpm --dir d:\Chem_final\Chem_new-main dev
+```
+访问：`http://localhost:8850/monitor-standalone`（监控独立页）
 
-// 连接
-await hardwareCommunication.connect("ws://192.168.1.14:2020");
+- AI WebSocket聚合（chemistry-back）
+```bash
+pnpm install --dir d:\Chem_final\chemistry-back
+``]
+```bash
+pnpm --dir d:\Chem_final\chemistry-back dev
+```
+说明：
+  - 监听 `3004`，根据 `serve` 将消息转发至：
+    - `single` → `ws://219.228.149.80:3010/single_retro`
+    - `multi` → `ws://219.228.149.80:3010/multi_retro`
+    - `graph`/`queue` → `ws://219.228.149.131:3300`
 
-// 发送命令
-await hardwareCommunication.sendCommand({
-  moduleId: 1,
-  localId: 2,
-  type: DeviceType.PUMP,
-  action: "start",
-  parameters: {
-    speed: 1000,
-    position: 5000
-  }
-});
+- 业务后端（/chem-api）
+  - 当前 `d:\Chem_final\pure-admin-backend` 为空，需接入你们的后端代码或镜像。
+  - 启动（示例，按你们后端实现为准）：
+```bash
+pnpm --dir d:\Chem_final\pure-admin-backend dev
 ```
 
-## 注意事项
+## 前端代理与环境变量
 
-1. 确保网络连接稳定，WebSocket需要持续连接
-2. 硬件命令格式必须符合协议要求
-3. 在高负载情况下，优先使用后端API而非直接WebSocket通信
-4. 通信错误会记录到日志，请定期检查
-
-# 化学上位机软件平台
-
-基于pure admin框架开发的化学上位机软件平台，用于与下位机硬件进行通信和控制。
-
-## 主要功能
-
-### Task界面功能
-
-#### 1. Scheduling（调度）功能
-- 选择多个任务后点击"scheduling"按钮
-- 系统自动构建调度数据并发送给AI调度服务
-- 支持下载调度数据为JSON文件
-- 调度结果会更新到任务的queueResult字段
-
-#### 2. Edit编辑反应路径参数功能
-- 点击Edit按钮打开全屏编辑界面
-- 可以修改设备参数（泵流速、加热温度、反应时间等）
-- 支持保存参数并自动返回任务页面
-- 参数会同步保存到数据库
-
-#### 3. Run执行工作流功能
-- 检查任务是否已完成调度
-- 生成执行计划并发送到硬件系统
-- 自动跳转到监控界面查看执行状态
-- 支持单个任务和批量任务执行
-
-#### 4. 🆕 参数显示功能
-- **新增功能**: 在任务表格中添加了"参数"列
-- 点击"参数"按钮可以查看该任务之前设置并保存的参数
-- 支持从数据库加载参数数据
-- 显示设备类型、参数设置等详细信息
-- 如果没有参数，提供快速跳转到编辑界面的按钮
-- 支持从参数查看界面直接跳转到编辑模式
-
-##### 参数显示功能特点：
-- **智能数据源**: 优先从本地数据加载，如果本地没有则从数据库获取
-- **详细信息展示**: 显示任务基本信息和设备参数详情
-- **设备类型识别**: 自动识别设备类型并显示对应的图标和颜色
-- **参数格式化**: 自动为参数添加合适的单位（如温度°C、流速mL/min等）
-- **加载状态**: 显示加载动画，提升用户体验
-- **错误处理**: 完善的错误处理机制，确保系统稳定性
-
-## 技术架构
-
-- **前端**: Vue3 + Element Plus + AntV G6
-- **后端**: Node.js + Express + TypeScript
-- **通信**: WebSocket实时通信
-- **数据存储**: JSON文件存储 + 数据库
-
-## API接口
-
-### 新增参数相关接口
-
-#### 获取任务参数
+- 父应用 `vite.config.ts` 代理：
+  - `/chem-api` → `process.env.VITE_BACKEND_URL || http://localhost:3000`
+  - `/api` → `process.env.VITE_API_TARGET || http://219.228.149.131:8080`
+  - `/child` → `process.env.VITE_CHILD_ORIGIN || http://localhost:8850`
+  - `/ws-ai` → `process.env.VITE_WS_AI_URL || ws://localhost:3004`
+- 建议在父/子应用 `.env.development` 或系统环境中设置（示例）：
+```bash
+set VITE_BACKEND_URL=http://localhost:3000
 ```
-GET /api/tasks/:taskId/parameters?taskKey=<taskKey>
+```bash
+set VITE_CHILD_ORIGIN=http://localhost:8850
+```
+```bash
+set VITE_WS_AI_URL=ws://localhost:3004
+```
+```bash
+set VITE_IFRAME_ALLOWED_ORIGINS=http://localhost:8848,http://localhost
+```
+- 子应用基础路径：`/child`（生产部署）
+
+## Docker 一键部署（前后端集成）
+
+- 构建并启动（自动打包父/子前端并启用 Nginx、chemistry-back、backend）
+```bash
+docker-compose -f d:\Chem_final\docker-compose.yml up -d --build
 ```
 
-#### 保存任务参数
+- 访问站点
+```bash
+start http://localhost
 ```
-POST /api/tasks/:taskId/parameters
-Body: {
-  taskKey: string,
-  parameters: object,
-  reactTime: number
-}
+
+- 说明
+  - Nginx 静态目录：
+    - 父应用：`/usr/share/nginx/html/parent`
+    - 子应用：`/usr/share/nginx/html/child`
+  - 反向代理：
+    - `/chem-api` → `backend:3000/chem-api`
+    - `/api` → `219.228.149.131:8080`
+    - `/ws-ai` → `chemistry-back:3004`
+  - 注意：`pure-admin-backend` 目录为空将导致后端构建失败。可暂时注释 compose 的 `backend` 服务或改用现有后端镜像。
+
+## 生产构建（不使用 Docker）
+
+- 父应用构建
+```bash
+pnpm --dir d:\Chem_final\pure_admin_antv_g6_phar_2025_04_07 build
 ```
+- 子应用构建
+```bash
+pnpm --dir d:\Chem_final\Chem_new-main build
+```
+- 部署建议
+  - 将父应用 `dist` 部署为站点根。
+  - 将子应用 `dist` 挂载为 `/child`。
+  - 使用 `d:\Chem_final\Chem_new-main\deploy\nginx\default.conf` 作为参考配置（含 `/chem-api`、`/ws-ai` 代理）。
+
+## 主要操作入口
+
+- 任务与监控（父应用）
+  - 任务列表与状态：
+    - `GET /chem-api/tasks/running`
+    - `GET /chem-api/tasks/:taskId`
+    - `POST /chem-api/tasks/start`（工作流启动上报）
+    - `POST /chem-api/tasks/sync`（任务状态同步）
+  - 监控容器：父应用将加载子应用的独立页 `http://localhost:8850/monitor-standalone`
+
+- 子应用（直接访问）
+  - 监控独立页：`/monitor-standalone`
+  - 结构控制页：`/topcontrol/index`
+
+- AI合成/调度（WebSocket）
+  - 前端通过 `/ws-ai` 与 `chemistry-back:3004` 通信，消息需包含 `serve` 字段（`single`/`multi`/`graph`/`queue`），由后端转发并回传结果。
+
+## 常见问题与排查
+
+- `/chem-api` 404 或 CORS：
+  - 启动实际后端（`3000`），或设置 `VITE_BACKEND_URL` 指向可用后端。
+- `/ws-ai` 连接失败：
+  - 确认 `chemistry-back` 运行中（端口 `3004`）、网络与防火墙允许 WS。
+- 子应用路径 404：
+  - 生产下子应用基础路径为 `/child`，请以 `/child/...` 访问。
+- 监控 iframe 不显示：
+  - 父应用会检查 `http://localhost:8850/monitor-standalone`；确保子应用开发服务已启动。
+
+## 运行验证清单
+
+- 父应用可打开并加载菜单与任务页。
+- 子应用可在独立端口访问监控页，并在父应用中以 iframe 打开。
+- `/chem-api` 接口可用；任务列表、启动与同步调用正常。
+- `/ws-ai` 能建立 WS；在合成/调度页面能收到结果与图谱回传。
+
+> 如需，我可进一步补充截图、接口示例或将本节拆分为 `docs/运行与操作说明.md` 并在 README 添加链接。
 
 ## 使用说明
 
@@ -221,4 +204,4 @@ pnpm dev
 cd pure-admin-backend
 pnpm install
 pnpm dev
-``` 
+```
